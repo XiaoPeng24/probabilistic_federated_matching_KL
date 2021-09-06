@@ -1,0 +1,85 @@
+08-17 13:48 DEBUG    Experiment arguments: Namespace(alpha=0.5, communication_rounds=5, datadir='data/mnist', dataset='mnist', device='cuda:0', dropout_p=0.0, epochs=10, experiment=['u-ensemble', 'pdm', 'pdm_KL'], init_seed=0, iter_epochs=5, logdir='log_abli/2020-08-17 13/mnist/hetero-dir/n_nets 2', lr=0.01, lr_decay=0.99, n_nets=2, net_config=[784, 100, 10], num_pool_workers=2, partition='hetero-dir', pdm_gamma=1.0, pdm_sig=1.0, pdm_sig0=1.0, reg=1e-06, reg_fac=0.0, trials=2)
+08-17 13:48 DEBUG    ####################################################################################################
+08-17 13:48 DEBUG    Executing Trial 0 with seed 0
+08-17 13:48 DEBUG    Data statistics: {0: {0: 2510, 1: 3617, 2: 874, 3: 4689, 4: 2402, 5: 110, 6: 86, 7: 5209, 8: 378, 9: 5949}, 1: {0: 3413, 1: 3125, 2: 5084, 3: 1442, 4: 3440, 5: 5311, 6: 5832, 7: 1056, 8: 5473}}
+08-17 13:48 DEBUG    Training network 0
+08-17 13:48 DEBUG    n_training: 807
+08-17 13:48 DEBUG    n_test: 313
+08-17 13:48 DEBUG    >> Pre-Training Training accuracy: 0.039382
+08-17 13:48 DEBUG    >> Pre-Training Test accuracy: 0.110600
+08-17 13:48 DEBUG    Epoch: 0 Loss: 0.021841 L2 loss: 0.001294
+08-17 13:48 DEBUG    Epoch: 1 Loss: 0.122157 L2 loss: 0.002142
+08-17 13:48 DEBUG    Epoch: 2 Loss: 0.143400 L2 loss: 0.002848
+08-17 13:48 DEBUG    Epoch: 3 Loss: 0.006893 L2 loss: 0.003468
+08-17 13:48 DEBUG    Epoch: 4 Loss: 0.103602 L2 loss: 0.004094
+08-17 13:48 DEBUG    Epoch: 5 Loss: 0.006845 L2 loss: 0.004743
+08-17 13:48 DEBUG    Epoch: 6 Loss: 0.031943 L2 loss: 0.005202
+08-17 13:48 DEBUG    Epoch: 7 Loss: 0.008248 L2 loss: 0.005640
+08-17 13:49 DEBUG    Epoch: 8 Loss: 0.173209 L2 loss: 0.006149
+08-17 13:49 DEBUG    Epoch: 9 Loss: 0.010089 L2 loss: 0.006516
+08-17 13:49 DEBUG    >> Training accuracy: 0.986640
+08-17 13:49 DEBUG    >> Test accuracy: 0.909800
+08-17 13:49 DEBUG     ** Training complete **
+08-17 13:49 DEBUG    Training network 1
+08-17 13:49 DEBUG    n_training: 1068
+08-17 13:49 DEBUG    n_test: 313
+08-17 13:49 DEBUG    >> Pre-Training Training accuracy: 0.100246
+08-17 13:49 DEBUG    >> Pre-Training Test accuracy: 0.117000
+08-17 13:49 DEBUG    Epoch: 0 Loss: 0.200783 L2 loss: 0.001712
+08-17 13:49 DEBUG    Epoch: 1 Loss: 0.184497 L2 loss: 0.002662
+08-17 13:49 DEBUG    Epoch: 2 Loss: 0.118018 L2 loss: 0.003631
+08-17 13:49 DEBUG    Epoch: 3 Loss: 0.019233 L2 loss: 0.004527
+08-17 13:49 DEBUG    Epoch: 4 Loss: 0.142259 L2 loss: 0.005148
+08-17 13:49 DEBUG    Epoch: 5 Loss: 0.016003 L2 loss: 0.005587
+08-17 13:49 DEBUG    Epoch: 6 Loss: 0.035420 L2 loss: 0.006067
+08-17 13:49 DEBUG    Epoch: 7 Loss: 0.131600 L2 loss: 0.006632
+08-17 13:49 DEBUG    Epoch: 8 Loss: 0.093509 L2 loss: 0.006978
+08-17 13:49 DEBUG    Epoch: 9 Loss: 0.092654 L2 loss: 0.007478
+08-17 13:49 DEBUG    >> Training accuracy: 0.990139
+08-17 13:49 DEBUG    >> Test accuracy: 0.870900
+08-17 13:49 DEBUG     ** Training complete **
+08-17 13:49 DEBUG    **************************************************
+08-17 13:49 DEBUG    Running experiments 
+
+08-17 13:49 DEBUG    Uniform ensemble (Train acc): 0.971983
+08-17 13:49 DEBUG    Uniform ensemble (Test acc): 0.959000
+08-17 13:49 DEBUG    ****** PDM matching ******** 
+08-17 13:49 DEBUG    Best Sigma0: 1. Best sigma: 1 Best gamma: 1. Best Test accuracy: 0.8948. Train acc: 0.9054666666666666. 
+
+08-17 13:49 DEBUG    PDM log: {(1, 1, 1): {'shapes': [(784, 158), (158,), (158, 10), (10,)], 'train_accuracy': 0.9054666666666666, 'test_accuracy': 0.8948}} 
+08-17 13:50 DEBUG    ****** PDM_KL matching ******** 
+08-17 13:50 DEBUG    Best Sigma0: 1. Best sigma: 1 Best gamma: 1. Best Test accuracy: 0.8649. Train acc: 0.8735833333333334. 
+
+08-17 13:50 DEBUG    PDM_KL log: {(1, 1, 1): {'shapes': [(784, 101), (101,), (101, 10), (10,)], 'train_accuracy': 0.8735833333333334, 'test_accuracy': 0.8649}} 
+08-17 13:50 DEBUG    Trial 0 completed
+08-17 13:50 DEBUG    ####################################################################################################
+08-17 13:50 DEBUG    ####################################################################################################
+08-17 13:50 DEBUG    Executing Trial 1 with seed 1
+08-17 13:50 DEBUG    Data statistics: {0: {0: 5243, 1: 2928, 2: 5923, 3: 749, 4: 2583, 5: 4506, 6: 5857, 7: 4219}, 1: {0: 680, 1: 3814, 2: 35, 3: 5382, 4: 3259, 5: 915, 6: 61, 7: 2046, 8: 5851, 9: 5949}}
+08-17 13:50 DEBUG    Training network 0
+08-17 13:50 DEBUG    n_training: 1001
+08-17 13:50 DEBUG    n_test: 313
+08-17 13:50 DEBUG    >> Pre-Training Training accuracy: 0.086385
+08-17 13:50 DEBUG    >> Pre-Training Test accuracy: 0.092400
+08-17 13:50 DEBUG    Epoch: 0 Loss: 0.003701 L2 loss: 0.001507
+08-17 13:50 DEBUG    Epoch: 1 Loss: 0.004395 L2 loss: 0.002389
+08-17 13:50 DEBUG    Epoch: 2 Loss: 0.163773 L2 loss: 0.003265
+08-17 13:50 DEBUG    Epoch: 3 Loss: 0.004931 L2 loss: 0.003961
+08-17 13:50 DEBUG    Epoch: 4 Loss: 0.031341 L2 loss: 0.004539
+08-17 13:50 DEBUG    Epoch: 5 Loss: 0.005015 L2 loss: 0.005011
+08-17 13:50 DEBUG    Epoch: 6 Loss: 0.005355 L2 loss: 0.005354
+08-17 13:50 DEBUG    Epoch: 7 Loss: 0.005757 L2 loss: 0.005733
+08-17 13:50 DEBUG    Epoch: 8 Loss: 0.006720 L2 loss: 0.006146
+08-17 13:50 DEBUG    Epoch: 9 Loss: 0.006523 L2 loss: 0.006523
+08-17 13:50 DEBUG    >> Training accuracy: 0.994783
+08-17 13:50 DEBUG    >> Test accuracy: 0.773200
+08-17 13:50 DEBUG     ** Training complete **
+08-17 13:50 DEBUG    Training network 1
+08-17 13:50 DEBUG    n_training: 875
+08-17 13:50 DEBUG    n_test: 313
+08-17 13:50 DEBUG    >> Pre-Training Training accuracy: 0.119856
+08-17 13:50 DEBUG    >> Pre-Training Test accuracy: 0.144300
+08-17 13:50 DEBUG    Epoch: 0 Loss: 0.227607 L2 loss: 0.001419
+08-17 13:50 DEBUG    Epoch: 1 Loss: 0.026507 L2 loss: 0.002370
+08-17 13:50 DEBUG    Epoch: 2 Loss: 0.047175 L2 loss: 0.003161
+08-17 13:50 DEBUG    Epoch: 3 Loss: 0.020922 L2 loss: 0.003921

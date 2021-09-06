@@ -1,0 +1,57 @@
+09-11 21:22 DEBUG    Experiment arguments: Namespace(alpha=0.5, communication_rounds=None, datadir='data/mnist', dataset='mnist', device=1.0, dropout_p=0.0, epochs=10, experiment=['all'], init_seed=0, iter_epochs=5, layers=0, loaddir='saved_weights/mnist/hetero-dir', logdir='KL_regs/mnist/hetero-dir', lr=0.01, lr_decay=1.0, n=30, n_layers=1, n_nets=15, net_config=[784, 100, 10], num_pool_workers=7, partition='hetero-dir', pdm_gamma=1.0, pdm_sig=1.0, pdm_sig0=1.0, reg=1e-06, reg_fac=0.0, trials=1)
+09-11 21:22 DEBUG    ####################################################################################################
+09-11 21:22 DEBUG    Executing Trial 0 with seed 0
+09-11 21:22 DEBUG    Data statistics: {0: {0: 372, 1: 791, 2: 1756, 3: 393, 4: 49, 5: 269, 6: 2685}, 1: {0: 506, 1: 726, 2: 1, 3: 4, 4: 45, 5: 533, 6: 1, 7: 371, 8: 186, 9: 247}, 2: {0: 476, 1: 1436, 2: 222, 3: 160, 4: 277, 5: 168, 6: 8, 7: 447, 8: 142, 9: 4623}, 3: {0: 147, 1: 280, 2: 198, 3: 299, 4: 92, 5: 20, 6: 25, 7: 325, 8: 122, 9: 34}, 4: {0: 148, 1: 31, 2: 1, 3: 1101, 4: 1579, 5: 7, 6: 457, 7: 329, 8: 155, 9: 65}, 5: {0: 64, 1: 10, 2: 9, 3: 113, 4: 339, 5: 82, 6: 2, 7: 28, 8: 1868, 9: 4}, 6: {0: 884, 1: 4, 2: 408, 3: 2, 4: 75, 5: 890, 6: 21, 7: 1668, 8: 1548}, 7: {0: 342, 1: 842, 2: 33, 3: 237, 4: 153, 5: 274, 6: 138, 7: 111, 8: 1149, 9: 4}, 8: {0: 145, 1: 154, 2: 1061, 3: 1490, 4: 325, 5: 7, 6: 234, 7: 999}, 9: {0: 575, 1: 682, 2: 86, 3: 59, 5: 30, 6: 93, 7: 1, 8: 6, 9: 732}, 10: {0: 2066, 1: 1229, 2: 1, 3: 32, 4: 138, 5: 1523}, 11: {0: 15, 1: 2, 2: 185, 3: 78, 4: 1613, 5: 222, 6: 114, 7: 69, 9: 59}, 12: {0: 177, 1: 267, 2: 623, 3: 669, 4: 1044, 5: 62, 6: 2014}, 13: {0: 4, 1: 231, 2: 2, 3: 25, 4: 109, 5: 1319, 6: 47, 7: 905, 8: 675, 9: 181}, 14: {0: 2, 1: 57, 2: 1372, 3: 1469, 4: 4, 5: 15, 6: 79, 7: 1012}}
+09-11 21:22 DEBUG    **************************************************
+09-11 21:22 DEBUG    Running experiments 
+
+09-11 21:23 DEBUG    Uniform ensemble (Train acc): 0.930933
+09-11 21:23 DEBUG    Uniform ensemble (Test acc): 0.929200
+09-11 21:23 DEBUG    FedAvg (Train acc): 0.143817
+09-11 21:23 DEBUG    FedAvg (Test acc): 0.150000
+09-11 21:26 DEBUG    ****** PDM_KL matching ******** 
+09-11 21:26 DEBUG    Best Sigma0: 0.5. Best sigma: 1 Best gamma: 10. Best Test accuracy: 0.866. Train acc: 0.8683833333333333. 
+
+09-11 21:26 DEBUG    PDM_KL log: {(0.5, 1, 10): {'shapes': [(784, 353), (353,), (353, 10), (10,)], 'train_accuracy': 0.8683833333333333, 'test_accuracy': 0.866}} 
+09-11 21:31 DEBUG    ****** PDM_KL matching ******** 
+09-11 21:31 DEBUG    Best Sigma0: 0.5. Best sigma: 1 Best gamma: 10. Best Test accuracy: 0.8743. Train acc: 0.8757. 
+
+09-11 21:31 DEBUG    PDM_KL log: {(0.5, 1, 10): {'shapes': [(784, 356), (356,), (356, 10), (10,)], 'train_accuracy': 0.8757, 'test_accuracy': 0.8743}} 
+09-11 21:37 DEBUG    ****** PDM_KL matching ******** 
+09-11 21:37 DEBUG    Best Sigma0: 0.5. Best sigma: 1 Best gamma: 10. Best Test accuracy: 0.8734. Train acc: 0.8732666666666666. 
+
+09-11 21:37 DEBUG    PDM_KL log: {(0.5, 1, 10): {'shapes': [(784, 354), (354,), (354, 10), (10,)], 'train_accuracy': 0.8732666666666666, 'test_accuracy': 0.8734}} 
+09-11 21:42 DEBUG    ****** PDM_KL matching ******** 
+09-11 21:42 DEBUG    Best Sigma0: 0.5. Best sigma: 1 Best gamma: 10. Best Test accuracy: 0.8649. Train acc: 0.8692333333333333. 
+
+09-11 21:42 DEBUG    PDM_KL log: {(0.5, 1, 10): {'shapes': [(784, 356), (356,), (356, 10), (10,)], 'train_accuracy': 0.8692333333333333, 'test_accuracy': 0.8649}} 
+09-11 21:48 DEBUG    ****** PDM_KL matching ******** 
+09-11 21:48 DEBUG    Best Sigma0: 0.5. Best sigma: 1 Best gamma: 10. Best Test accuracy: 0.8705. Train acc: 0.8724333333333333. 
+
+09-11 21:48 DEBUG    PDM_KL log: {(0.5, 1, 10): {'shapes': [(784, 360), (360,), (360, 10), (10,)], 'train_accuracy': 0.8724333333333333, 'test_accuracy': 0.8705}} 
+09-11 21:54 DEBUG    ****** PDM_KL matching ******** 
+09-11 21:54 DEBUG    Best Sigma0: 0.5. Best sigma: 1 Best gamma: 10. Best Test accuracy: 0.8588. Train acc: 0.8643666666666666. 
+
+09-11 21:54 DEBUG    PDM_KL log: {(0.5, 1, 10): {'shapes': [(784, 369), (369,), (369, 10), (10,)], 'train_accuracy': 0.8643666666666666, 'test_accuracy': 0.8588}} 
+09-11 22:01 DEBUG    ****** PDM_KL matching ******** 
+09-11 22:01 DEBUG    Best Sigma0: 0.5. Best sigma: 1 Best gamma: 10. Best Test accuracy: 0.8616. Train acc: 0.8637166666666667. 
+
+09-11 22:01 DEBUG    PDM_KL log: {(0.5, 1, 10): {'shapes': [(784, 446), (446,), (446, 10), (10,)], 'train_accuracy': 0.8637166666666667, 'test_accuracy': 0.8616}} 
+09-11 22:10 DEBUG    ****** PDM_KL matching ******** 
+09-11 22:10 DEBUG    Best Sigma0: 0.5. Best sigma: 1 Best gamma: 10. Best Test accuracy: 0.8611. Train acc: 0.86125. 
+
+09-11 22:10 DEBUG    PDM_KL log: {(0.5, 1, 10): {'shapes': [(784, 562), (562,), (562, 10), (10,)], 'train_accuracy': 0.86125, 'test_accuracy': 0.8611}} 
+09-11 22:17 DEBUG    ****** PDM_KL matching ******** 
+09-11 22:17 DEBUG    Best Sigma0: 0.5. Best sigma: 1 Best gamma: 10. Best Test accuracy: 0.8082. Train acc: 0.8085666666666667. 
+
+09-11 22:17 DEBUG    PDM_KL log: {(0.5, 1, 10): {'shapes': [(784, 416), (416,), (416, 10), (10,)], 'train_accuracy': 0.8085666666666667, 'test_accuracy': 0.8082}} 
+09-11 22:20 DEBUG    ****** PDM_KL matching ******** 
+09-11 22:20 DEBUG    Best Sigma0: 0.5. Best sigma: 1 Best gamma: 10. Best Test accuracy: 0.1343. Train acc: 0.13191666666666665. 
+
+09-11 22:20 DEBUG    PDM_KL log: {(0.5, 1, 10): {'shapes': [(784, 156), (156,), (156, 10), (10,)], 'train_accuracy': 0.13191666666666665, 'test_accuracy': 0.1343}} 
+09-11 22:23 DEBUG    ****** PDM_KL matching ******** 
+09-11 22:23 DEBUG    Best Sigma0: 0.5. Best sigma: 1 Best gamma: 10. Best Test accuracy: 0.1009. Train acc: 0.0992. 
+
+09-11 22:23 DEBUG    PDM_KL log: {(0.5, 1, 10): {'shapes': [(784, 184), (184,), (184, 10), (10,)], 'train_accuracy': 0.0992, 'test_accuracy': 0.1009}} 
+09-11 22:23 DEBUG    Trial 0 completed
+09-11 22:23 DEBUG    ####################################################################################################

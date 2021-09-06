@@ -1,0 +1,13 @@
+python experiment.py --logdir "logs/mnist_skip_test" \
+--dataset "mnist" \
+--datadir "data/mnist/" \
+--net_config "784, 100, 100, 10" \
+--n_nets 10 \
+--partition "hetero-dir" \
+--experiment "pdm,skip" \
+--lr 0.01 \
+--epochs 1 \
+--reg 1e-6 \
+--communication_rounds 5 \
+--lr_decay 0.99 \
+--iter_epochs 5

@@ -1,0 +1,24 @@
+09-04 22:40 DEBUG    Experiment arguments: Namespace(alpha=0.5, communication_rounds=None, datadir='data/mnist', dataset='mnist', device=1.0, dropout_p=0.0, epochs=1, experiment=['pdm_KL', 'FedAvg'], init_seed=0, iter_epochs=5, logdir='log_abli/2020-08-17 18/mnist/hetero-dir', lr=0.01, lr_decay=1.0, n_layers=2, n_nets=2, net_config=[784, 100, 10], num_pool_workers=2, partition='hetero-dir', pdm_gamma=1.0, pdm_sig=1.0, pdm_sig0=1.0, reg=1e-06, reg_fac=0.0, trials=1)
+09-0409-04 22:40 DEBUG    ################################################################################################09-0409-04 22:40 DEBUG    Executing Trial 0 with se09-04 22:40 DEBUG    Data statistics: {0: {0: 2510, 1: 3617, 2: 874, 3: 4689, 4: 2402, 5: 110, 6: 86, 7: 5209, 8: 378, 9: 5949}, 1: {0: 3413, 1: 3125, 2: 5084, 3: 1442, 4: 3440, 5: 5311, 6: 5832, 7: 1056, 8: 5473}}
+09-04 22:40 DEBUG    Training network 0
+09-04 22:40 DEBUG    n_training: 807
+09-04 22:40 DEBUG    n_test: 313
+09-04 22:40 DEBUG    >> Pre-Training Training accuracy: 0.039382
+09-04 22:40 DEBUG    >> Pre-Training Test accuracy: 0.110600
+09-0409-04 22:41 DEBUG    Epoch: 0 Loss: 0.126758 L2 loss: 0.0009-0409-04 22:41 DEBUG    >> Training accuracy: 0.954112
+09-04 22:41 DEBUG    >> Test accuracy: 0.831200
+09-04 22:41 DEBUG     ** Training complete **
+09-04 22:41 DEBUG    Training network 1
+09-04 22:41 DEBUG    n_training: 1068
+09-04 22:41 DEBUG    n_test:09-0409-04 22:41 DEBUG    >> Pre-Training Training accuracy: 0.103143
+09-04 22:41 DEBUG    >> Pre-Training Test accuracy: 0.1109-0409-04 22:41 DEBUG    Epoch: 0 Loss: 0.029086 L2 loss: 0.0009-0409-04 22:41 DEBUG    >> Training accuracy: 0.965005
+09-04 22:41 DEBUG    >> Test accuracy: 0.856300
+09-04 22:41 DEBUG     ** Training complete **
+09-04 22:41 DEBUG    **************************************************
+09-04 22:41 DEBUG    Running experimen09-0409-04 22:41 DEBUG    FedAvg (Train acc): 0.556217
+09-04 22:41 DEBUG    FedAvg (Test acc): 0.5509-0409-04 22:41 DEBUG    ****** PDM_KL matching ******** 
+09-04 22:41 DEBUG    Best Sigma0: 1. Best sigma: 1 Best gamma: 1. Best Test accuracy: 0.7844. Train acc: 0.7848. 
+
+09-04 22:41 DEBUG    PDM_KL log: {(1, 1, 1): {'shapes': [(784, 100), (100,), (100, 100), (100,), (100, 10), (10,)], 'train_accuracy': 0.7848, 'test_accuracy': 0.7844}} 
+09-04 22:41 DEBUG    Trial 0 completed
+09-04 22:41 DEBUG    ####################################################################################################
