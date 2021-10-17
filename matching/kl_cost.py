@@ -3,22 +3,28 @@ from scipy.optimize import linear_sum_assignment
 import pdb
 
 
-def row_param_cost(global_weights, weights_j_l, global_sigmas, sigma_inv_j):
+def row_param_cost(global_weights, weights_j_l, global_sigmas, sigma_inv_j, fix_coff=0):
+
+    fix_norms =  - (weights_j_l ** 2).sum()
 
     match_norms = ((weights_j_l + global_weights) ** 2 / (sigma_inv_j + global_sigmas)).sum(axis=1) - (
-                global_weights ** 2 / global_sigmas).sum(axis=1)
+                global_weights ** 2 / global_sigmas).sum(axis=1) + fix_coff * fix_norms
 
     return match_norms
 
 
 def compute_cost(global_weights, weights_j, global_sigmas, sigma_inv_j, prior_mean_norm, prior_inv_sigma,
-                 popularity_counts, gamma, J):
+                 popularity_counts, gamma, J, coff=1, fix_coff=0):
+
+    '''
+    coff: adjust the norm and the log
+    '''
 
     Lj = weights_j.shape[0]
     #counts = np.minimum(np.array(popularity_counts), 10)
     counts = np.array(popularity_counts)
 
-    param_cost = np.array([row_param_cost(global_weights, weights_j[l], global_sigmas, sigma_inv_j) for l in range(Lj)])
+    param_cost = coff * np.array([row_param_cost(global_weights, weights_j[l], global_sigmas, sigma_inv_j) for l in range(Lj)])
     param_cost += np.log(counts / (J - counts))
 
     ## Nonparametric cost
@@ -26,8 +32,8 @@ def compute_cost(global_weights, weights_j, global_sigmas, sigma_inv_j, prior_me
     #max_added = min(Lj, max(700 - L, 1))
     max_added = Lj
 
-    nonparam_cost = np.outer((((weights_j + prior_mean_norm) ** 2 / (prior_inv_sigma + sigma_inv_j)).sum(axis=1) - (
-                prior_mean_norm ** 2 / prior_inv_sigma).sum()), np.ones(max_added))
+    nonparam_cost = coff * np.outer((((weights_j + prior_mean_norm) ** 2 / (prior_inv_sigma + sigma_inv_j)).sum(axis=1) - (
+                prior_mean_norm ** 2 / prior_inv_sigma).sum() - fix_coff*(weights_j ** 2).sum(axis=1)), np.ones(max_added))
     cost_pois = 2 * np.log(np.arange(1, max_added + 1))
     nonparam_cost -= cost_pois
     nonparam_cost += 2 * np.log(gamma / J)
