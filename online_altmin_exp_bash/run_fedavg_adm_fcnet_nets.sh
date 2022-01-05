@@ -1,0 +1,4 @@
+#!/bin/bash
+
+#CUDA_VISIBLE_DEVICES=0,1,2,3 python -m torch.distributed.launch --nproc_per_node=4 /home/irving/federated_matching/FedMA/Semantic_Segmentation/save_weights.py --n_=2 --init_same=True --model=unet --bilinear=True --dataset=carvana --n_channels=3 --n_classes=1 --batch_size=8 --lr=0.0001 --epochs=2 --trials=10
+python /home/irving/federated_matching/probabilistic_federated_matching_KL/online_altmin_exp.py --layers 0 --n 15 20 25 30 --experiment "pdm_KL,fedavg_comm" --net_config "784, 100, 10" --dataset "mnist" --num_pool_workers 4 --trials 10 --model 'ffnet' --retrain True --epochs 10 --device=1 --init_same True --n-hidden-layers 1 --no-batchnorm True
