@@ -11,7 +11,8 @@ from itertools import product
 import copy
 from sklearn.metrics import confusion_matrix
 import datetime
-import logging
+
+from utils import *
 
 from model import FcNet
 from datasets import MNIST_truncated, CIFAR10_truncated
@@ -28,41 +29,60 @@ def mkdirs(dirpath):
 def get_parser():
 
     parser = argparse.ArgumentParser()
+    parser.add_argument('--init_same', type=bool, required=False, help='All models init with same weight')
 
+    # partitioning setting......
     parser.add_argument('--layers', type=int, required=True, help='do n_nets or n_layers')
-    parser.add_argument('--n', type=int, required=True, help='the number of nets or layers')
+    parser.add_argument('--n', nargs='+', type=int, required=True, help='the number of nets or layers')
+    parser.add_argument('--n_layers', type=int, required=False, default=1, help="Number of hidden layers")
+    parser.add_argument('--n_nets', type=int, required=False, default=10, help="Number of nets to initialize")
+    parser.add_argument('--partition', type=str, required=False, help="Partition = homo/hetero/hetero-dir")
+    parser.add_argument('--alpha', type=float, required=False, default=0.5,
+                        help="Dirichlet distribution constant used for data partitioning")
 
+    # save and load dir
+    parser.add_argument('--loaddir', type=str, required=False, help='Load weights directory path')
     parser.add_argument('--logdir', type=str, required=False, help='Log directory path')
-    parser.add_argument('--dropout_p', type=float, required=False, default=0.0, help="Dropout probability. Default=0.0")
+
+    # training setting......
     parser.add_argument('--dataset', type=str, required=False, default="mnist", help="Dataset [mnist/cifar10]")
     parser.add_argument('--datadir', type=str, required=False, default="./data/mnist", help="Data directory")
+    parser.add_argument('--model', type=str, required=True, default="fcnet", help="which model to train")
+    parser.add_argument('--net_config', type=lambda x: list(map(int, x.split(', '))),
+                        help="the layer config for Fully Connected neural network")
+    parser.add_argument('--lr', type=float, required=False, default=0.01, help="Learning rate")
+    parser.add_argument('--retrain_lr', type=float, default=0.1,
+                        help='learning rate using in specific for local network retrain (default: 0.01)')
+    parser.add_argument('--fine_tune_lr', type=float, default=0.1,
+                        help='learning rate using in specific for fine tuning the softmax layer on the data center (default: 0.01)')
+    parser.add_argument('--epochs', type=int, required=False, default=10, help="Epochs")
+    parser.add_argument('--retrain_epochs', type=int, default=1,
+                        help='how many epochs will be trained in during the locally retraining process')
+    parser.add_argument('--dropout_p', type=float, required=False, default=0.0, help="Dropout probability. Default=0.0")
+    parser.add_argument('--batch_size', type=int, required=False, default=32, help="the batch size to train")
+    parser.add_argument('--reg', type=float, required=False, default=1e-6, help="L2 regularization strength")
+    parser.add_argument('--retrain', type=bool, required=True, default=True,
+                        help="Do we need retrain the init weights?")
+
+    # randomization setting
     parser.add_argument('--init_seed', type=int, required=False, default=0, help="Random seed")
 
-    parser.add_argument('--net_config', type=lambda x: list(map(int, x.split(', '))))
-
-    parser.add_argument('--n_layers', type=int , required=False, default=1, help="Number of hidden layers")
-
-    parser.add_argument('--n_nets', type=int , required=False, default=10, help="Number of nets to initialize")
-    parser.add_argument('--partition', type=str, required=False, help="Partition = homo/hetero/hetero-dir")
-    parser.add_argument('--experiment', required=False, default="None", type=lambda s: s.split(','), help="Type of experiment to run. [none/w-ensemble/u-ensemble/pdm/all]")
+    # matching experiment setting......
+    parser.add_argument('--experiment', required=False, default="None", type=lambda s: s.split(','),
+                        help="Type of experiment to run. [none/w-ensemble/u-ensemble/pdm/all]")
     parser.add_argument('--trials', type=int, required=False, default=1, help="Number of trials for each run")
-    
-    parser.add_argument('--lr', type=float, required=False, default=0.01, help="Learning rate")
-    parser.add_argument('--epochs', type=int, required=False, default=10, help="Epochs")
-    parser.add_argument('--reg', type=float, required=False, default=1e-6, help="L2 regularization strength")
-
-    parser.add_argument('--alpha', type=float, required=False, default=0.5, help="Dirichlet distribution constant used for data partitioning")
-
-    parser.add_argument('--communication_rounds', type=int, required=False, default=None, help="How many iterations of PDM matching should be done")
-    parser.add_argument('--lr_decay', type=float, required=False, default=1.0, help="Decay LR after every PDM iterative communication")
     parser.add_argument('--iter_epochs', type=int, required=False, default=5, help="Epochs for PDM-iterative method")
     parser.add_argument('--reg_fac', type=float, required=False, default=0.0, help="Regularization factor for PDM Iter")
-
     parser.add_argument('--pdm_sig', type=float, required=False, default=1.0, help="PDM sigma param")
     parser.add_argument('--pdm_sig0', type=float, required=False, default=1.0, help="PDM sigma0 param")
     parser.add_argument('--pdm_gamma', type=float, required=False, default=1.0, help="PDM gamma param")
+    parser.add_argument('--communication_rounds', type=int, required=False, default=None,
+                        help="How many iterations of PDM matching should be done")
+    parser.add_argument('--lr_decay', type=float, required=False, default=1.0,
+                        help="Decay LR after every PDM iterative communication")
 
-    parser.add_argument('--device', type=str, required=False, default=1.0, help="Device to run")
+    # hardware setting (device and multiprocessing)
+    parser.add_argument('--device', type=str, required=False, help="Device to run")
     parser.add_argument('--num_pool_workers', type=int, required=True, help='the num of workers')
     
     return parser
@@ -164,21 +184,6 @@ def partition_data(dataset, datadir, logdir, partition, n_nets, alpha=0.5):
 
     return (X_train, y_train, X_test, y_test, net_dataidx_map, traindata_cls_counts)
 
-def init_nets(net_configs, dropout_p, n_nets):
-
-    input_size = net_configs[0]
-    output_size = net_configs[-1]
-    hidden_sizes = net_configs[1:-1]
-
-    nets = {net_i: None for net_i in range(n_nets)}
-
-    for net_i in range(n_nets):
-        net = FcNet(input_size, hidden_sizes, output_size, dropout_p)
-
-        nets[net_i] = net
-
-    return nets
-
 def get_dataloader(dataset, datadir, train_bs, test_bs, dataidxs=None):
 
     if dataset == 'mnist':
@@ -235,28 +240,32 @@ def compute_accuracy(model, dataloader, get_confusion_matrix=False, device="cpu"
 
     return correct/float(total)
 
-def train_net(net_id, net, train_dataloader, test_dataloader, epochs, lr, reg, reg_base_weights=None,
+def train_net(net_id, net, train_dataloader, test_dataloader, args, reg_base_weights=None,
               save_path=None, device="cpu"):
 
-    logging.debug('Training network %s' % str(net_id))
-    logging.debug('n_training: %d' % len(train_dataloader))
-    logging.debug('n_test: %d' % len(test_dataloader))
+    logger.info('Training network %s' % str(net_id))
+    logger.info('n_training: %d' % len(train_dataloader))
+    logger.info('n_test: %d' % len(test_dataloader))
 
     net.to(device)
     train_acc = compute_accuracy(net, train_dataloader, device=device)
     test_acc, conf_matrix = compute_accuracy(net, test_dataloader, get_confusion_matrix=True, device=device)
 
-    logging.debug('>> Pre-Training Training accuracy: %f' % train_acc)
-    logging.debug('>> Pre-Training Test accuracy: %f' % test_acc)
+    logger.info('>> Pre-Training Training accuracy: %f' % train_acc)
+    logger.info('>> Pre-Training Test accuracy: %f' % test_acc)
 
-    optimizer = optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=lr, weight_decay=0.0, amsgrad=True)      # L2_reg=0 because it's manually added later
+    if args.model == "fcnet":
+        optimizer = optim.Adam(filter(lambda p: p.requires_grad, net.parameters()),
+                               lr=args.lr, weight_decay=0.0, amsgrad=True)      # L2_reg=0 because it's manually added later
+    else:
+        optimizer = optim.SGD(net.parameters(), lr=args.lr)
 
     criterion = nn.CrossEntropyLoss().to(device)
 
     cnt = 0
     losses, running_losses = [], []
 
-    for epoch in range(epochs):
+    for epoch in range(args.epochs):
         for batch_idx, (x, target) in enumerate(train_dataloader):
             x, target = x.to(device), target.to(device)
             #pdb.set_trace()
@@ -294,7 +303,7 @@ def train_net(net_id, net, train_dataloader, test_dataloader, epochs, lr, reg, r
                     l2_reg = l2_reg + 0.5 * torch.pow((param - torch.from_numpy(ref_param).float()), 2).sum()
             #pdb.set_trace()
             #l2_reg = (reg * l2_reg).to(device)
-            loss = loss + reg * l2_reg
+            loss = loss + args.reg * l2_reg
 
             loss.backward()
             optimizer.step()
@@ -302,21 +311,15 @@ def train_net(net_id, net, train_dataloader, test_dataloader, epochs, lr, reg, r
             cnt += 1
             losses.append(loss.item())
 
-        logging.debug('Epoch: %d Loss: %f L2 loss: %f' % (epoch, loss.item(), reg*l2_reg))
-
-    if save_path:
-        torch.save(net.state_dict(), save_path)
+        logger.info('Epoch: %d Loss: %f L2 loss: %f' % (epoch, loss.item(), args.reg*l2_reg))
 
     train_acc = compute_accuracy(net, train_dataloader, device=device)
     test_acc, conf_matrix = compute_accuracy(net, test_dataloader, get_confusion_matrix=True, device=device)
 
-    logging.debug('>> Training accuracy: %f' % train_acc)
-    logging.debug('>> Test accuracy: %f' % test_acc)
-
-    logging.debug(' ** Training complete **')
-
+    logger.info('>> Training accuracy: %f' % train_acc)
+    logger.info('>> Test accuracy: %f' % test_acc)
+    logger.info(' ** Training complete **')
     return train_acc, test_acc
-
 
 def load_new_state(nets, new_weights):
 
@@ -354,10 +357,11 @@ def run_exp(n):
     print("Current device is :", device)
 
     if args.layers == 1:
-        if args.dataset == "mnist":
-            args.net_config = list(map(int, ("784, "+"100, "*n+"10").split(', ')))
-        elif args.dataset == "cifar10":
-            args.net_config = list(map(int, ("3072, "+"100, "*n+"10").split(', ')))
+        if args.model == "fcnet":
+            if args.dataset == "mnist":
+                args.net_config = list(map(int, ("784, " + "100, " * n + "10").split(', ')))
+            elif args.dataset == "cifar10":
+                args.net_config = list(map(int, ("3072, " + "100, " * n + "10").split(', ')))
 
         log_dir = os.path.join(args.logdir, "n_layers "+str(n))
     else:
@@ -366,17 +370,8 @@ def run_exp(n):
 
     if not os.path.exists(log_dir):
         mkdirs(log_dir)
-    #with open(os.path.join(log_dir, 'experiment_arguments.json'), 'w') as f:
-        #json.dump(str(args), f)
-    #print("the log_dir is", args.logdir)
-    filename = os.path.join(log_dir, 'experiment_log-%d-%d.log' % (args.init_seed, args.trials))
-    #print("the log filename is", filename)
-    logging.basicConfig(
-        filename=filename,
-        format='%(asctime)s %(levelname)-8s %(message)s',
-        datefmt='%m-%d %H:%M', level=logging.DEBUG, filemode='w')
 
-    logging.debug("Experiment arguments: %s" % str(args))
+    logger.info("Experiment arguments: %s" % str(args))
 
     trials_res = {}
     trials_res["Experiment arguments"] = str(args)
@@ -405,7 +400,7 @@ def run_exp(n):
         n_classes = len(np.unique(y_train))
 
         print("Initializing nets")
-        nets = init_nets(args.net_config, args.dropout_p, args.n_nets)
+        nets, model_meta_data, layer_type = init_nets(args.net_config, args.dropout_p, args.n_nets, args)
 
         local_train_accs = []
         local_test_accs = []
@@ -415,9 +410,11 @@ def run_exp(n):
             print("Training network %s. n_training: %d" % (str(net_id), len(dataidxs)))
 
             save_path = os.path.join(save_dir, "model "+str(net_id)+".pkl")
-            train_dl, test_dl = get_dataloader(args.dataset, args.datadir, 32, 32, dataidxs)
-            trainacc, testacc = train_net(net_id, net, train_dl, test_dl, args.epochs, args.lr, args.reg, 
-                                         save_path=save_path, device=device)
+            train_dl, test_dl = get_dataloader(args.dataset, args.datadir, args.batch_size, 32, dataidxs)
+            trainacc, testacc = train_net(net_id, net, train_dl, test_dl, args, device=device)
+            # saving the trained models here
+            with open(save_path, "wb") as f_:
+                torch.save(net.state_dict(), f_)
 
             local_train_accs.append(trainacc)
             local_test_accs.append(testacc)
@@ -452,7 +449,7 @@ from multiprocessing import Pool
 import contextlib
 
 z = lambda x: list(map(int, x.split(',')))
-def abli_exp(n=10, dataset="mnist"):
+def abli_exp(n=[10], dataset="mnist"):
 
     #if n_nets > 10:
     #    n_nets_list = [i for i in range(15, n_nets+1, 5)]
@@ -468,10 +465,9 @@ def abli_exp(n=10, dataset="mnist"):
     partitions = ["hetero-dir", "homo"]
     #n_layer_list = [i+2 for i in range(n_layers-1)] # don't need layer_num 1
     if args.layers == 1:
-        n_list = [i+1 for i in range(n)]
+        n_list = n
     else:
-        n_list = [i for i in range(0, n+1, 5)]
-        n_list[0] = 2
+        n_list = n
 
     #args.experiments = "u-ensemble,pdm,pdm_KL"
     args.dataset = dataset
@@ -492,8 +488,12 @@ def abli_exp(n=10, dataset="mnist"):
     for partition in partitions:
         #logdir = os.path.join('log_abli', now.strftime("%Y-%m-%d %H"),
         #                      dataset, partition)
-        logdir = os.path.join('saved_weights',
-                              dataset, partition)
+        if args.init_same:
+            logdir = os.path.join('saved_weights', dataset,
+                                  'init_same', partition, args.model)
+        else:
+            logdir = os.path.join('saved_weights',
+                                  dataset, partition, args.model)
         args.logdir = logdir
         args.partition = partition
         print("Partition type is ", partition)

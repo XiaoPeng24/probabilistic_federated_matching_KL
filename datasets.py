@@ -23,8 +23,8 @@ def load_mnist_data(datadir):
 
 def load_cifar10_data(datadir):
 
-    transform = transforms.Compose([transforms.ToTensor()],
-								   transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)))
+    transform = transforms.Compose([transforms.ToTensor(),
+								   transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 
     cifar10_train_ds = CIFAR10_truncated(datadir, train=True, download=True, transform=transform)
     cifar10_test_ds = CIFAR10_truncated(datadir, train=False, download=True, transform=transform)

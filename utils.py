@@ -94,22 +94,24 @@ def partition_data(dataset, datadir, logdir, partition, n_nets, alpha=0.5):
 
 
 def init_nets(net_configs, dropout_p, n_nets, args):
-    input_size = net_configs[0]
-    output_size = net_configs[-1]
-    hidden_sizes = net_configs[1:-1]
-
-    nets = {net_i: None for net_i in range(n_nets)}
 
     model_meta_data = []
     layer_type = []
+    nets = {net_i: None for net_i in range(n_nets)}
 
     for net_i in range(n_nets):
         if args.model == "fcnet":
+            input_size = net_configs[0]
+            output_size = net_configs[-1]
+            hidden_sizes = net_configs[1:-1]
             net = FcNet(input_size, hidden_sizes, output_size, dropout_p)
         elif args.model == "simple-cnn":
-            cnn = SimpleCNN(input_dim=(16 * 5 * 5), hidden_dims=[120, 84], output_dim=10)
+            net = SimpleCNN(input_dim=(16 * 5 * 5), hidden_dims=[120, 84], output_dim=10)
         elif args.model == "moderate-cnn":
-            cnn = ModerateCNN()
+            net = ModerateCNN()
+
+        if args.init_same and net_i > 0:
+            net.load_state_dict(nets[0].state_dict())
 
         nets[net_i] = net
 

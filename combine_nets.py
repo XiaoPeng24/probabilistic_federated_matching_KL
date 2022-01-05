@@ -6,15 +6,12 @@ from model import FcNet, cat_w_b
 
 from matching.pfnm import layer_group_descent as pdm_multilayer_group_descent
 from matching.pfnm import layer_skip_group_descent as skip_multilayer_group_descent
-from matching.pfnm import layer_wise_group_descent
-from matching.pfnm import block_patching, patch_weights
 from matching.pfnm_communication import layer_group_descent as pdm_iterative_layer_group_descent
 from matching.pfnm_communication import build_init as pdm_build_init
 
 from itertools import product
 from sklearn.metrics import confusion_matrix
 from utils import *
-from KL_reg_unlimi import local_retrain
 import pdb
 
 def prepare_weight_matrix(n_classes, weights: dict):
@@ -307,7 +304,7 @@ def weights_prob_selfI_stats(weights, layer_type, sigma0, args):
     """
 
     # get the weight_bias
-    n_layers = int(len(weights / 2))
+    n_layers = int(len(weights) / 2)
 
     stats_layers = {}
     stats_layers['probability'] = []
@@ -522,11 +519,12 @@ def compute_pdm_matching_multilayer(models, train_dl, test_dl, cls_freqs, n_clas
     for gamma, sigma, sigma0 in product(gammas, sigmas, sigma0s):
         print("Gamma: ", gamma, "Sigma: ", sigma, "Sigma0: ", sigma0)
 
-        hungarian_weights = pdm_multilayer_group_descent(
+        hungarian_weights, assignments = pdm_multilayer_group_descent(
             batch_weights, sigma0_layers=sigma0, sigma_layers=sigma, batch_frequencies=batch_freqs, it=it, gamma_layers=gamma, 
             KL_reg=KL_reg, unlimi=unlimi, use_freq=use_freq
         )
         #hungarian_weights.to(device)
+        #pdb.set_trace()
         train_acc, test_acc, _, _ = compute_pdm_net_accuracy(hungarian_weights, train_dl, test_dl, n_classes, device=device)
 
         res = {}
@@ -550,157 +548,111 @@ def compute_pdm_matching_multilayer(models, train_dl, test_dl, cls_freqs, n_clas
 
     return res
 
-def BBP_MAP(nets_list, model_meta_data, layer_type, net_dataidx_map, traindata_cls_counts,
-            averaging_weights, args, n_classes, sigma0=None, it=0, sigma=None, gamma=None,
-            device="cpu", KL_reg=0, unlimi=False):
-    # starting the neural matching
-    models = nets_list
-    cls_freqs = traindata_cls_counts
-    assignments_list = []
+def save_matching_weights(weights, args, save_path):
+    """Note that we only handle the FC weights for now"""
+    # we need to figure out the FC dims first
 
-    batch_weights = pdm_prepare_weights(models, device=device)
-    raw_batch_weights = copy.deepcopy(batch_weights)
+    # LeNetContainer
+    # def __init__(self, num_filters, kernel_size, input_dim, hidden_dims, output_dim=10)
 
-    logger.info("==" * 15)
-    logger.info("Weights shapes: {}".format([bw.shape for bw in batch_weights[0]]))
+    # this should be safe to be hard-coded since most of the modern image classification dataset are in RGB format
+    # args_n_nets = len(models)
 
-    batch_freqs = pdm_prepare_freq(cls_freqs, n_classes)
-    best_test_acc, best_train_acc, best_weights, best_sigma, best_gamma, best_sigma0 = -1, -1, None, -1, -1, -1
+    if args.model == "fcnet":
+        dims = []
+        dims.append(weights[0].shape[0])
 
-    n_layers = int(len(batch_weights[0]) / 2)
-    num_workers = len(nets_list)
-    matching_shapes = []
+        for i in range(0, len(weights), 2):
+            dims.append(weights[i].shape[1])
 
-    first_fc_index = None
+        ip_dim = dims[0]
+        op_dim = dims[-1]
+        hidden_dims = dims[1:-1]
 
-    for layer_index in range(1, n_layers):
-        layer_hungarian_weights, assignment, L_next = layer_wise_group_descent(
-            batch_weights=batch_weights,
-            layer_index=layer_index,
-            sigma0_layers=sigma0,
-            sigma_layers=sigma,
-            batch_frequencies=batch_freqs,
-            it=it,
-            gamma_layers=gamma,
-            model_meta_data=model_meta_data,
-            model_layer_type=layer_type,
-            n_layers=n_layers,
-            matching_shapes=matching_shapes,
-            args=args, KL_reg=KL_reg, unlimi=unlimi
-        )
-        assignments_list.append(assignment)
+        matched_net = FcNet(ip_dim, hidden_dims, op_dim)
 
-        # iii) load weights to the model and train the whole thing
-        type_of_patched_layer = layer_type[2 * (layer_index + 1) - 2]
-        if 'conv' in type_of_patched_layer or 'features' in type_of_patched_layer:
-            l_type = "conv"
-        elif 'fc' in type_of_patched_layer or 'classifier' in type_of_patched_layer:
-            l_type = "fc"
+    elif args.model == "simple-cnn":
+        # input_channel, num_filters, kernel_size, input_dim, hidden_dims, output_dim=10):
+        # [(9, 75), (9,), (19, 225), (19,), (475, 123), (123,), (123, 87), (87,), (87, 10), (10,)]
+        if args.dataset in ("cifar10", "cinic10"):
+            input_channel = 3
+        elif args.dataset == "mnist":
+            input_channel = 1
+        num_filters = [weights[0].shape[0], weights[2].shape[0]]
+        input_dim = weights[4].shape[0]
+        hidden_dims = [weights[4].shape[1], weights[6].shape[1]]
+        matched_net = SimpleCNNContainer(input_channel=input_channel,
+                                         num_filters=num_filters,
+                                         kernel_size=5,
+                                         input_dim=input_dim,
+                                         hidden_dims=hidden_dims,
+                                         output_dim=10)
+    elif args.model == "moderate-cnn":
+        # [(35, 27), (35,), (68, 315), (68,), (132, 612), (132,), (132, 1188), (132,),
+        # (260, 1188), (260,), (260, 2340), (260,),
+        # (4160, 1025), (1025,), (1025, 515), (515,), (515, 10), (10,)]
+        num_filters = [weights[0].shape[0], weights[2].shape[0], weights[4].shape[0], weights[6].shape[0],
+                       weights[8].shape[0], weights[10].shape[0]]
+        input_dim = weights[12].shape[0]
+        hidden_dims = [weights[12].shape[1], weights[14].shape[1]]
+        if args.dataset in ("cifar10", "cinic10"):
+            matched_net = ModerateCNNContainer(3,
+                                               num_filters,
+                                               kernel_size=3,
+                                               input_dim=input_dim,
+                                               hidden_dims=hidden_dims,
+                                               output_dim=10)
+        elif args.dataset == "mnist":
+            matched_net = ModerateCNNContainer(1,
+                                               num_filters,
+                                               kernel_size=3,
+                                               input_dim=input_dim,
+                                               hidden_dims=hidden_dims,
+                                               output_dim=10)
 
-        type_of_this_layer = layer_type[2 * layer_index - 2]
-        type_of_prev_layer = layer_type[2 * layer_index - 2 - 2]
-        first_fc_identifier = (('fc' in type_of_this_layer or 'classifier' in type_of_this_layer) and (
-                    'conv' in type_of_prev_layer or 'features' in type_of_this_layer))
+    if args.model == "fcnet":
+        statedict = matched_net.state_dict()
 
-        if first_fc_identifier:
-            first_fc_index = layer_index
+        # print(pdm_net)
 
-        matching_shapes.append(L_next)
-        tempt_weights = [
-            ([batch_weights[w][i] for i in range(2 * layer_index - 2)] + copy.deepcopy(layer_hungarian_weights)) for w
-            in range(num_workers)]
+        i = 0
+        layer_i = 0
+        while i < len(weights):
+            weight = weights[i]
+            i += 1
+            bias = weights[i]
+            i += 1
 
-        # i) permutate the next layer wrt matching result
-        for worker_index in range(num_workers):
-            if first_fc_index is None:
-                if l_type == "conv":
-                    patched_weight = block_patching(batch_weights[worker_index][2 * (layer_index + 1) - 2],
-                                                    L_next, assignment[worker_index],
-                                                    layer_index + 1, model_meta_data,
-                                                    matching_shapes=matching_shapes, layer_type=l_type,
-                                                    dataset=args.dataset, network_name=args.model)
-                elif l_type == "fc":
-                    patched_weight = block_patching(batch_weights[worker_index][2 * (layer_index + 1) - 2].T,
-                                                    L_next, assignment[worker_index],
-                                                    layer_index + 1, model_meta_data,
-                                                    matching_shapes=matching_shapes, layer_type=l_type,
-                                                    dataset=args.dataset, network_name=args.model).T
+            statedict['layers.%d.weight' % layer_i] = torch.from_numpy(weight.T)
+            statedict['layers.%d.bias' % layer_i] = torch.from_numpy(bias)
+            layer_i += 1
 
-            elif layer_index >= first_fc_index:
-                patched_weight = patch_weights(batch_weights[worker_index][2 * (layer_index + 1) - 2].T, L_next,
-                                               assignment[worker_index]).T
+        matched_net.load_state_dict(statedict)
+    else:
+        # logger.info("Keys of layers of convblock ...")
+        new_state_dict = {}
+        model_counter = 0
+        # handle the conv layers part which is not changing
+        for param_idx, (key_name, param) in enumerate(matched_net.state_dict().items()):
+            # print("&"*30)
+            # print("Key: {}, Weight Shape: {}, Matched weight shape: {}".format(key_name, param.size(), weights[param_idx].shape))
+            # print("&"*30)
+            if "conv" in key_name or "features" in key_name:
+                if "weight" in key_name:
+                    temp_dict = {key_name: torch.from_numpy(weights[param_idx].reshape(param.size()))}
+                elif "bias" in key_name:
+                    temp_dict = {key_name: torch.from_numpy(weights[param_idx])}
+            elif "fc" in key_name or "classifier" in key_name:
+                if "weight" in key_name:
+                    temp_dict = {key_name: torch.from_numpy(weights[param_idx].T)}
+                elif "bias" in key_name:
+                    temp_dict = {key_name: torch.from_numpy(weights[param_idx])}
 
-            tempt_weights[worker_index].append(patched_weight)
+            new_state_dict.update(temp_dict)
+        matched_net.load_state_dict(new_state_dict)
 
-        # ii) prepare the whole network weights
-        for worker_index in range(num_workers):
-            for lid in range(2 * (layer_index + 1) - 1, len(batch_weights[0])):
-                tempt_weights[worker_index].append(batch_weights[worker_index][lid])
-
-        retrained_nets = []
-        for worker_index in range(num_workers):
-            dataidxs = net_dataidx_map[worker_index]
-            train_dl_local, test_dl_local = get_dataloader(args.dataset, args.datadir, args.batch_size, 32, dataidxs)
-
-            logger.info("Re-training on local worker: {}, starting from layer: {}".format(worker_index,
-                                                                                          2 * (layer_index + 1) - 2))
-            retrained_cnn = local_retrain((train_dl_local, test_dl_local), tempt_weights[worker_index], args,
-                                          freezing_index=(2 * (layer_index + 1) - 2), device=device)
-            retrained_nets.append(retrained_cnn)
-        batch_weights = pdm_prepare_weights(retrained_nets, device=device)
-
-    ## we handle the last layer carefully here ...
-    ## averaging the last layer
-    matched_weights = []
-    num_layers = len(batch_weights[0])
-
-    with open('./matching_weights_cache/matched_layerwise_weights', 'wb') as weights_file:
-        pickle.dump(batch_weights, weights_file)
-
-    last_layer_weights_collector = []
-
-    for i in range(num_workers):
-        # firstly we combine last layer's weight and bias
-        bias_shape = batch_weights[i][-1].shape
-        last_layer_bias = batch_weights[i][-1].reshape((1, bias_shape[0]))
-        last_layer_weights = np.concatenate((batch_weights[i][-2], last_layer_bias), axis=0)
-
-        # the directed normalization doesn't work well, let's try weighted averaging
-        last_layer_weights_collector.append(last_layer_weights)
-
-    last_layer_weights_collector = np.array(last_layer_weights_collector)
-
-    avg_last_layer_weight = np.zeros(last_layer_weights_collector[0].shape, dtype=np.float32)
-
-    for i in range(n_classes):
-        avg_weight_collector = np.zeros(last_layer_weights_collector[0][:, 0].shape, dtype=np.float32)
-        for j in range(num_workers):
-            avg_weight_collector += averaging_weights[j][i] * last_layer_weights_collector[j][:, i]
-        avg_last_layer_weight[:, i] = avg_weight_collector
-
-    # avg_last_layer_weight = np.mean(last_layer_weights_collector, axis=0)
-    for i in range(num_layers):
-        if i < (num_layers - 2):
-            matched_weights.append(batch_weights[0][i])
-
-    matched_weights.append(avg_last_layer_weight[0:-1, :])
-    matched_weights.append(avg_last_layer_weight[-1, :])
-
-    train_dl, test_dl = get_dataloader(args.dataset, args.datadir, args.batch_size, 32)
-    train_acc, test_acc, _, _ = compute_full_cnn_accuracy(nets_list, matched_weights,
-                                                          train_dl, test_dl, n_classes, device=device)
-
-    res = {}
-    res['shapes'] = list(map(lambda x: x.shape, matched_weights))
-    res['train_accuracy'] = train_acc
-    res['test_accuracy'] = test_acc
-    res['sigma0'] = sigma0
-    res['sigma'] = best_sigma
-    res['gamma'] = best_gamma
-    res['weights'] = best_weights
-
-    return res
-
+    logger.info("****** Save the matching weights in %s ******** " % (save_path))
+    torch.save(matched_net.state_dict(), save_path)
 
 def compute_skip_matching_multilayer(models, train_dl, test_dl, cls_freqs, n_classes, sigma0=None, it=0, sigma=None, gamma=None, 
                                     device="cpu", KL_reg=0, unlimi=False):

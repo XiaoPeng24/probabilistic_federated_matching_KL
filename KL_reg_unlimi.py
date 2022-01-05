@@ -12,10 +12,12 @@ from sklearn.metrics import confusion_matrix
 import datetime
 
 from utils import *
-from datasets import MNIST_truncated, CIFAR10_truncated
+from train_tools import *
 
-from combine_nets import compute_ensemble_accuracy, compute_pdm_matching_multilayer, compute_iterative_pdm_matching, compute_fedavg_accuracy
-from combine_nets import BBP_MAP, weights_prob_selfI_stats
+from matching.pfnm import layer_wise_group_descent
+from matching.pfnm import block_patching, patch_weights
+
+from combine_nets import *
 import pdb
 
 def mkdirs(dirpath):
@@ -27,43 +29,60 @@ def mkdirs(dirpath):
 def get_parser():
 
     parser = argparse.ArgumentParser()
+    parser.add_argument('--init_same', type=bool, required=False, help='All models init with same weight')
 
+    # partitioning setting......
     parser.add_argument('--layers', type=int, required=True, help='do n_nets or n_layers')
     parser.add_argument('--n', nargs='+', type=int, required=True, help='the number of nets or layers')
+    parser.add_argument('--n_layers', type=int, required=False, default=1, help="Number of hidden layers")
+    parser.add_argument('--n_nets', type=int, required=False, default=10, help="Number of nets to initialize")
+    parser.add_argument('--partition', type=str, required=False, help="Partition = homo/hetero/hetero-dir")
+    parser.add_argument('--alpha', type=float, required=False, default=0.5,
+                        help="Dirichlet distribution constant used for data partitioning")
 
+    # save and load dir
     parser.add_argument('--loaddir', type=str, required=False, help='Load weights directory path')
     parser.add_argument('--logdir', type=str, required=False, help='Log directory path')
-    parser.add_argument('--dropout_p', type=float, required=False, default=0.0, help="Dropout probability. Default=0.0")
+
+    # training setting......
     parser.add_argument('--dataset', type=str, required=False, default="mnist", help="Dataset [mnist/cifar10]")
     parser.add_argument('--datadir', type=str, required=False, default="./data/mnist", help="Data directory")
+    parser.add_argument('--model', type=str, required=True, default="fcnet", help="which model to train")
+    parser.add_argument('--net_config', type=lambda x: list(map(int, x.split(', '))), help="the layer config for Fully Connected neural network")
+    parser.add_argument('--lr', type=float, required=False, default=0.01, help="Learning rate")
+    parser.add_argument('--retrain_lr', type=float, default=0.1,
+                        help='learning rate using in specific for local network retrain (default: 0.01)')
+    parser.add_argument('--fine_tune_lr', type=float, default=0.1,
+                        help='learning rate using in specific for fine tuning the softmax layer on the data center (default: 0.01)')
+    parser.add_argument('--epochs', type=int, required=False, default=10, help="Epochs")
+    parser.add_argument('--retrain_epochs', type=int, default=1,
+                        help='how many epochs will be trained in during the locally retraining process')
+    parser.add_argument('--dropout_p', type=float, required=False, default=0.0, help="Dropout probability. Default=0.0")
+    parser.add_argument('--batch_size', type=int, required=False, default=64, help="the batch size to train")
+    parser.add_argument('--reg', type=float, required=False, default=1e-6, help="L2 regularization strength")
+    parser.add_argument('--retrain', type=bool, required=True, default=False,
+                        help="Do we need retrain the init weights?")
+    parser.add_argument('--train_prox', type=bool, required=False, default=False,
+                        help="Do we train the network in prox way")
+
+    # randomization setting
     parser.add_argument('--init_seed', type=int, required=False, default=0, help="Random seed")
 
-    parser.add_argument('--net_config', type=lambda x: list(map(int, x.split(', '))))
-
-    parser.add_argument('--n_layers', type=int , required=False, default=1, help="Number of hidden layers")
-
-    parser.add_argument('--n_nets', type=int , required=False, default=10, help="Number of nets to initialize")
-    parser.add_argument('--partition', type=str, required=False, help="Partition = homo/hetero/hetero-dir")
+    # matching experiment setting......
     parser.add_argument('--experiment', required=False, default="None", type=lambda s: s.split(','), help="Type of experiment to run. [none/w-ensemble/u-ensemble/pdm/all]")
     parser.add_argument('--trials', type=int, required=False, default=1, help="Number of trials for each run")
-    
-    parser.add_argument('--lr', type=float, required=False, default=0.01, help="Learning rate")
-    parser.add_argument('--epochs', type=int, required=False, default=10, help="Epochs")
-    parser.add_argument('--reg', type=float, required=False, default=1e-6, help="L2 regularization strength")
-    parser.add_argument('--retrain', type=bool, required=True, default=True, help="Do we need retrain the init weights?")
-
-    parser.add_argument('--alpha', type=float, required=False, default=0.5, help="Dirichlet distribution constant used for data partitioning")
-
-    parser.add_argument('--communication_rounds', type=int, required=False, default=None, help="How many iterations of PDM matching should be done")
-    parser.add_argument('--lr_decay', type=float, required=False, default=1.0, help="Decay LR after every PDM iterative communication")
     parser.add_argument('--iter_epochs', type=int, required=False, default=5, help="Epochs for PDM-iterative method")
     parser.add_argument('--reg_fac', type=float, required=False, default=0.0, help="Regularization factor for PDM Iter")
-
     parser.add_argument('--pdm_sig', type=float, required=False, default=1.0, help="PDM sigma param")
     parser.add_argument('--pdm_sig0', type=float, required=False, default=1.0, help="PDM sigma0 param")
     parser.add_argument('--pdm_gamma', type=float, required=False, default=1.0, help="PDM gamma param")
-
-    parser.add_argument('--device', type=str, required=False, default=1.0, help="Device to run")
+    parser.add_argument('--communication_rounds', type=int, required=False, default=None, help="How many iterations of PDM matching should be done")
+    parser.add_argument('--lr_decay', type=float, required=False, default=1.0, help="Decay LR after every PDM iterative communication")
+    parser.add_argument('--fedavg_comm_round', type=int, default=19, 
+                            help='how many round of communications we shoud use')
+    
+    # hardware setting (device and multiprocessing)
+    parser.add_argument('--device', type=str, required=False, help="Device to run")
     parser.add_argument('--num_pool_workers', type=int, required=True, help='the num of workers')
     
     return parser
@@ -77,19 +96,19 @@ def trans_next_conv_layer_backward(layer_weight, next_layer_shape):
     reshaped = layer_weight.reshape(reconstructed_next_layer_shape).transpose(1, 0, 2, 3).reshape(next_layer_shape[0], -1)
     return reshaped
 
-def train_net(net_id, net, train_dataloader, test_dataloader, args, epochs, lr, reg, reg_base_weights=None,
+def train_net(net_id, net, train_dataloader, test_dataloader, args, reg_base_weights=None,
               save_path=None, device="cpu"):
 
-    logger.debug('Training network %s' % str(net_id))
-    logger.debug('n_training: %d' % len(train_dataloader))
-    logger.debug('n_test: %d' % len(test_dataloader))
+    logger.info('Training network %s' % str(net_id))
+    logger.info('n_training: %d' % len(train_dataloader))
+    logger.info('n_test: %d' % len(test_dataloader))
 
     net.to(device)
     train_acc = compute_accuracy(net, train_dataloader, device=device)
     test_acc, conf_matrix = compute_accuracy(net, test_dataloader, get_confusion_matrix=True, device=device)
 
-    logger.debug('>> Pre-Training Training accuracy: %f' % train_acc)
-    logger.debug('>> Pre-Training Test accuracy: %f' % test_acc)
+    logger.info('>> Pre-Training Training accuracy: %f' % train_acc)
+    logger.info('>> Pre-Training Test accuracy: %f' % test_acc)
 
     if args.model == "fcnet":
         optimizer = optim.Adam(filter(lambda p: p.requires_grad, net.parameters()),
@@ -101,6 +120,10 @@ def train_net(net_id, net, train_dataloader, test_dataloader, args, epochs, lr, 
 
     cnt = 0
     losses, running_losses = [], []
+
+    global_weight_collector = []
+    for param_idx, (key_name, param) in enumerate(net.state_dict().items()):
+        global_weight_collector.append(param)
 
     for epoch in range(args.epochs):
         for batch_idx, (x, target) in enumerate(train_dataloader):
@@ -140,6 +163,16 @@ def train_net(net_id, net, train_dataloader, test_dataloader, args, epochs, lr, 
                     l2_reg = l2_reg + 0.5 * torch.pow((param - torch.from_numpy(ref_param).float()), 2).sum()
             #pdb.set_trace()
             #l2_reg = (reg * l2_reg).to(device)
+
+            #########################we implement FedProx Here###########################
+            if args.train_prox:
+                fed_prox_reg = 0.0
+                for param_index, param in enumerate(net.parameters()):
+                    fed_prox_reg += ((0.001 / 2) * torch.norm((param - global_weight_collector[param_index])) ** 2)
+                loss += fed_prox_reg
+            ##############################################################################
+
+
             loss = loss + args.reg * l2_reg
 
             loss.backward()
@@ -148,7 +181,15 @@ def train_net(net_id, net, train_dataloader, test_dataloader, args, epochs, lr, 
             cnt += 1
             losses.append(loss.item())
 
-        logger.debug('Epoch: %d Loss: %f L2 loss: %f' % (epoch, loss.item(), reg*l2_reg))
+        logger.info('Epoch: %d Loss: %f L2 loss: %f' % (epoch, loss.item(), args.reg*l2_reg))
+
+    train_acc = compute_accuracy(net, train_dataloader, device=device)
+    test_acc, conf_matrix = compute_accuracy(net, test_dataloader, get_confusion_matrix=True, device=device)
+
+    logger.info('>> Training accuracy: %f' % train_acc)
+    logger.info('>> Test accuracy: %f' % test_acc)
+    logger.info(' ** Training complete **')
+    return train_acc, test_acc
 
 def local_train(nets, args, net_dataidx_map, device="cpu"):
     # save local dataset
@@ -166,8 +207,7 @@ def local_train(nets, args, net_dataidx_map, device="cpu"):
         weight_path = os.path.join(args.weight_dir, "model " + str(net_id) + ".pkl")
         local_datasets.append((train_dl_local, test_dl_local))
         if args.retrain:
-            train_acc, test_acc = train_net(net_id, net, train_dl_local, test_dl_local, args.epochs, args.lr,
-                                            args.reg, save_path=None, device=device)
+            train_acc, test_acc = train_net(net_id, net, train_dl_local, test_dl_local, args, save_path=None, device=device)
             # saving the trained models here
             with open(weight_path, "wb") as f_:
                 torch.save(net.state_dict(), f_)
@@ -489,7 +529,7 @@ def local_retrain(local_datasets, weights, args, mode="bottom-up", freezing_inde
             loss.backward()
             optimizer_fine_tune.step()
 
-        # logger.debug('Epoch: %d Loss: %f L2 loss: %f' % (epoch, loss.item(), reg*l2_reg))
+        # logger.info('Epoch: %d Loss: %f L2 loss: %f' % (epoch, loss.item(), reg*l2_reg))
         epoch_loss = sum(epoch_loss_collector) / len(epoch_loss_collector)
         logger.info('Epoch: %d Epoch Avg Loss: %f' % (epoch, epoch_loss))
 
@@ -499,6 +539,254 @@ def local_retrain(local_datasets, weights, args, mode="bottom-up", freezing_inde
     logger.info('>> Training accuracy after local retrain: %f' % train_acc)
     logger.info('>> Test accuracy after local retrain: %f' % test_acc)
     return matched_cnn
+
+def BBP_MAP(nets_list, model_meta_data, layer_type, net_dataidx_map, traindata_cls_counts,
+            averaging_weights, args, n_classes, sigma0=None, it=0, sigma=None, gamma=None,
+            device="cpu", KL_reg=0, unlimi=False):
+    # starting the neural matching
+    models = nets_list
+    cls_freqs = traindata_cls_counts
+    assignments_list = []
+
+    batch_weights = pdm_prepare_weights(models, device=device)
+    raw_batch_weights = copy.deepcopy(batch_weights)
+
+    logger.info("==" * 15)
+    logger.info("Weights shapes: {}".format([bw.shape for bw in batch_weights[0]]))
+
+    batch_freqs = pdm_prepare_freq(cls_freqs, n_classes)
+    best_test_acc, best_train_acc, best_weights, best_sigma, best_gamma, best_sigma0 = -1, -1, None, -1, -1, -1
+
+    n_layers = int(len(batch_weights[0]) / 2)
+    num_workers = len(nets_list)
+    matching_shapes = []
+
+    first_fc_index = None
+
+    for layer_index in range(1, n_layers):
+        layer_hungarian_weights, assignment, L_next = layer_wise_group_descent(
+            batch_weights=batch_weights,
+            layer_index=layer_index,
+            sigma0_layers=sigma0,
+            sigma_layers=sigma,
+            batch_frequencies=batch_freqs,
+            it=it,
+            gamma_layers=gamma,
+            model_meta_data=model_meta_data,
+            model_layer_type=layer_type,
+            n_layers=n_layers,
+            matching_shapes=matching_shapes,
+            args=args, KL_reg=KL_reg, unlimi=unlimi
+        )
+        assignments_list.append(assignment)
+
+        # iii) load weights to the model and train the whole thing
+        type_of_patched_layer = layer_type[2 * (layer_index + 1) - 2]
+        if 'conv' in type_of_patched_layer or 'features' in type_of_patched_layer:
+            l_type = "conv"
+        elif 'fc' in type_of_patched_layer or 'classifier' in type_of_patched_layer:
+            l_type = "fc"
+
+        type_of_this_layer = layer_type[2 * layer_index - 2]
+        type_of_prev_layer = layer_type[2 * layer_index - 2 - 2]
+        first_fc_identifier = (('fc' in type_of_this_layer or 'classifier' in type_of_this_layer) and (
+                    'conv' in type_of_prev_layer or 'features' in type_of_this_layer))
+
+        if first_fc_identifier:
+            first_fc_index = layer_index
+
+        matching_shapes.append(L_next)
+        tempt_weights = [
+            ([batch_weights[w][i] for i in range(2 * layer_index - 2)] + copy.deepcopy(layer_hungarian_weights)) for w
+            in range(num_workers)]
+
+        # i) permutate the next layer wrt matching result
+        for worker_index in range(num_workers):
+            if first_fc_index is None:
+                if l_type == "conv":
+                    patched_weight = block_patching(batch_weights[worker_index][2 * (layer_index + 1) - 2],
+                                                    L_next, assignment[worker_index],
+                                                    layer_index + 1, model_meta_data,
+                                                    matching_shapes=matching_shapes, layer_type=l_type,
+                                                    dataset=args.dataset, network_name=args.model)
+                elif l_type == "fc":
+                    patched_weight = block_patching(batch_weights[worker_index][2 * (layer_index + 1) - 2].T,
+                                                    L_next, assignment[worker_index],
+                                                    layer_index + 1, model_meta_data,
+                                                    matching_shapes=matching_shapes, layer_type=l_type,
+                                                    dataset=args.dataset, network_name=args.model).T
+
+            elif layer_index >= first_fc_index:
+                patched_weight = patch_weights(batch_weights[worker_index][2 * (layer_index + 1) - 2].T, L_next,
+                                               assignment[worker_index]).T
+
+            tempt_weights[worker_index].append(patched_weight)
+
+        # ii) prepare the whole network weights
+        for worker_index in range(num_workers):
+            for lid in range(2 * (layer_index + 1) - 1, len(batch_weights[0])):
+                tempt_weights[worker_index].append(batch_weights[worker_index][lid])
+
+        retrained_nets = []
+        for worker_index in range(num_workers):
+            dataidxs = net_dataidx_map[worker_index]
+            train_dl_local, test_dl_local = get_dataloader(args.dataset, args.datadir, args.batch_size, 32, dataidxs)
+
+            logger.info("Re-training on local worker: {}, starting from layer: {}".format(worker_index,
+                                                                                          2 * (layer_index + 1) - 2))
+            retrained_cnn = local_retrain((train_dl_local, test_dl_local), tempt_weights[worker_index], args,
+                                          freezing_index=(2 * (layer_index + 1) - 2), device=device)
+            retrained_nets.append(retrained_cnn)
+        batch_weights = pdm_prepare_weights(retrained_nets, device=device)
+
+    ## we handle the last layer carefully here ...
+    ## averaging the last layer
+    matched_weights = []
+    num_layers = len(batch_weights[0])
+
+    with open('./matching_weights_cache/matched_layerwise_weights', 'wb') as weights_file:
+        pickle.dump(batch_weights, weights_file)
+
+    last_layer_weights_collector = []
+
+    for i in range(num_workers):
+        # firstly we combine last layer's weight and bias
+        bias_shape = batch_weights[i][-1].shape
+        last_layer_bias = batch_weights[i][-1].reshape((1, bias_shape[0]))
+        last_layer_weights = np.concatenate((batch_weights[i][-2], last_layer_bias), axis=0)
+
+        # the directed normalization doesn't work well, let's try weighted averaging
+        last_layer_weights_collector.append(last_layer_weights)
+
+    last_layer_weights_collector = np.array(last_layer_weights_collector)
+
+    avg_last_layer_weight = np.zeros(last_layer_weights_collector[0].shape, dtype=np.float32)
+
+    for i in range(n_classes):
+        avg_weight_collector = np.zeros(last_layer_weights_collector[0][:, 0].shape, dtype=np.float32)
+        for j in range(num_workers):
+            avg_weight_collector += averaging_weights[j][i] * last_layer_weights_collector[j][:, i]
+        avg_last_layer_weight[:, i] = avg_weight_collector
+
+    # avg_last_layer_weight = np.mean(last_layer_weights_collector, axis=0)
+    for i in range(num_layers):
+        if i < (num_layers - 2):
+            matched_weights.append(batch_weights[0][i])
+
+    matched_weights.append(avg_last_layer_weight[0:-1, :])
+    matched_weights.append(avg_last_layer_weight[-1, :])
+
+    train_dl, test_dl = get_dataloader(args.dataset, args.datadir, args.batch_size, 32)
+    train_acc, test_acc, _, _ = compute_full_cnn_accuracy(nets_list, matched_weights,
+                                                          train_dl, test_dl, n_classes, device=device,
+                                                          args=args)
+
+    res = {}
+    res['shapes'] = list(map(lambda x: x.shape, matched_weights))
+    res['train_accuracy'] = train_acc
+    res['test_accuracy'] = test_acc
+    res['sigma0'] = sigma0
+    res['sigma'] = best_sigma
+    res['gamma'] = best_gamma
+    res['weights'] = matched_weights
+
+    return res
+
+def fedavg_comm(batch_weights, model_meta_data, layer_type, net_dataidx_map,
+                            averaging_weights, args,
+                            train_dl_global,
+                            test_dl_global,
+                            comm_round=2,
+                            device="cpu"):
+
+    logger.info("=="*15)
+    logger.info("Weights shapes: {}".format([bw.shape for bw in batch_weights[0]]))
+
+    test_accuracy_comms = []
+    for cr in range(comm_round):
+        retrained_nets = []
+        logger.info("Communication round : {}".format(cr))
+        for worker_index in range(args.n_nets):
+            dataidxs = net_dataidx_map[worker_index]
+            train_dl_local, test_dl_local = get_dataloader(args.dataset, args.datadir, args.batch_size, 32, dataidxs)
+            
+            # def local_retrain_fedavg(local_datasets, weights, args, device="cpu"):
+            retrained_cnn = local_retrain_fedavg(len(dataidxs), (train_dl_local,test_dl_local), batch_weights[worker_index], args,
+                                                 device=device)
+            
+            retrained_nets.append(retrained_cnn)
+        batch_weights = pdm_prepare_weights(retrained_nets, device=device)
+
+        total_data_points = sum([len(net_dataidx_map[r]) for r in range(args.n_nets)])
+        fed_avg_freqs = [len(net_dataidx_map[r]) / total_data_points for r in range(args.n_nets)]
+        averaged_weights = []
+        num_layers = len(batch_weights[0])
+        
+        for i in range(num_layers):
+            avegerated_weight = sum([b[i] * fed_avg_freqs[j] for j, b in enumerate(batch_weights)])
+            averaged_weights.append(avegerated_weight)
+
+        train_acc, test_acc, _, _ = compute_full_cnn_accuracy(None, 
+                                        averaged_weights,
+                                        train_dl_global, 
+                                        test_dl_global, 
+                                        10, 
+                                        device=device,
+                                        args=args)
+
+        batch_weights = [copy.deepcopy(averaged_weights) for _ in range(args.n_nets)]
+        del averaged_weights
+        test_accuracy_comms.append(test_acc)
+
+    return test_accuracy_comms
+
+def fedprox_comm(batch_weights, model_meta_data, layer_type, net_dataidx_map,
+                            averaging_weights, args,
+                            train_dl_global,
+                            test_dl_global,
+                            comm_round=2,
+                            device="cpu"):
+
+    logging.info("=="*15)
+    logging.info("Weights shapes: {}".format([bw.shape for bw in batch_weights[0]]))
+
+    test_accuracy_comms = []
+    for cr in range(comm_round):
+        retrained_nets = []
+        logger.info("Communication round : {}".format(cr))
+        for worker_index in range(args.n_nets):
+            dataidxs = net_dataidx_map[worker_index]
+            train_dl_local, test_dl_local = get_dataloader(args.dataset, args.datadir, args.batch_size, 32, dataidxs)
+            
+            # def local_retrain_fedavg(local_datasets, weights, args, device="cpu"):
+            # local_retrain_fedprox(local_datasets, weights, mu, args, device="cpu")
+            retrained_cnn = local_retrain_fedprox(len(dataidxs), (train_dl_local,test_dl_local), batch_weights[worker_index], mu=0.001,
+                                                   args=args, device=device)
+            
+            retrained_nets.append(retrained_cnn)
+        batch_weights = pdm_prepare_weights(retrained_nets, device=device)
+
+        total_data_points = sum([len(net_dataidx_map[r]) for r in range(args.n_nets)])
+        fed_avg_freqs = [len(net_dataidx_map[r]) / total_data_points for r in range(args.n_nets)]
+        averaged_weights = []
+        num_layers = len(batch_weights[0])
+        
+        for i in range(num_layers):
+            avegerated_weight = sum([b[i] * fed_avg_freqs[j] for j, b in enumerate(batch_weights)])
+            averaged_weights.append(avegerated_weight)
+
+        train_acc, test_acc, _, _ = compute_full_cnn_accuracy(None, 
+                                        averaged_weights,
+                                        train_dl_global, 
+                                        test_dl_global, 
+                                        10, 
+                                        device=device,
+                                        args=args)
+        batch_weights = [copy.deepcopy(averaged_weights) for _ in range(args.n_nets)]
+        del averaged_weights
+        test_accuracy_comms.append(test_acc)
+
+    return test_accuracy_comms
 
 def load_new_state(nets, new_weights):
 
@@ -531,16 +819,26 @@ def run_exp(n):
     #args.logdir = os.path.join(logdir, "n_nets "+str(n_nets))
     #gpu_id = int(n_layer+2 % 4)
     #gpu_id = 3 if n%4 == 0 else 1
-    gpu_id = 1
-    device_str = "cuda:" + str(gpu_id)
+    gpu_id = 0
+    if n == 10:
+        gpu_id = 1
+    elif n == 15:
+        gpu_id = 2
+    elif n == 20:
+        gpu_id = 3
+    if args.device is not None:
+        device_str = "cuda:" + str(args.device)
+    else:
+        device_str = "cuda:" + str(gpu_id)
     device = torch.device(device_str if torch.cuda.is_available() else "cpu")
     print("Current device is :", device)
 
     if args.layers == 1:
-        if args.dataset == "mnist":
-            args.net_config = list(map(int, ("784, "+"100, "*n+"10").split(', ')))
-        elif args.dataset == "cifar10":
-            args.net_config = list(map(int, ("3072, "+"100, "*n+"10").split(', ')))
+        if args.model == "fcnet":
+            if args.dataset == "mnist":
+                args.net_config = list(map(int, ("784, " + "100, " * n + "10").split(', ')))
+            elif args.dataset == "cifar10":
+                args.net_config = list(map(int, ("3072, " + "100, " * n + "10").split(', ')))
 
         log_dir = os.path.join(args.logdir, "n_layers "+str(n))
         load_dir = os.path.join(args.loaddir, "n_layers "+str(n))
@@ -551,17 +849,8 @@ def run_exp(n):
 
     if not os.path.exists(log_dir):
         mkdirs(log_dir)
-    #with open(os.path.join(log_dir, 'experiment_arguments.json'), 'w') as f:
-        #json.dump(str(args), f)
-    #print("the log_dir is", args.logdir)
-    filename = os.path.join(log_dir, 'experiment_log-%d-%d.log' % (args.init_seed, args.trials))
-    #print("the log filename is", filename)
-    logger.basicConfig(
-        filename=filename,
-        format='%(asctime)s %(levelname)-8s %(message)s',
-        datefmt='%m-%d %H:%M', level=logger.DEBUG, filemode='w')
 
-    logger.debug("Experiment arguments: %s" % str(args))
+    logger.info("Experiment arguments: %s" % str(args))
 
     trials_res = {}
     trials_res["Experiment arguments"] = str(args)
@@ -570,14 +859,16 @@ def run_exp(n):
 
     for trial in range(args.trials):
         #save_dir = os.path.join(log_dir, "trial "+str(trial))
-        weight_dir = os.path.join(load_dir, "trial "+str(trial))
+        args.weight_dir = os.path.join(load_dir, "trial "+str(trial))
+        if not os.path.exists(args.weight_dir):
+            mkdirs(args.weight_dir)
 
         trials_res[trial] = {}
         seed = trial + args.init_seed
         trials_res[trial]['seed'] = seed
         print("Executing Trial %d " % trial)
-        logger.debug("#" * 100)
-        logger.debug("Executing Trial %d with seed %d" % (trial, seed))
+        logger.info("#" * 100)
+        logger.info("Executing Trial %d with seed %d" % (trial, seed))
 
         np.random.seed(seed)
         torch.manual_seed(seed)
@@ -640,18 +931,20 @@ def run_exp(n):
         trials_res[trial]['local_test_accs'] = local_test_accs
         train_dl, test_dl = get_dataloader(args.dataset, args.datadir, 32, 32)
 
-        logger.debug("*"*50)
-        logger.debug("Running experiments \n")
+        logger.info("*"*50)
+        logger.info("Running experiments \n")
 
         nets_list = list(nets.values())
+
+        trial_path = str(trial)
 
         if ("u-ensemble" in args.experiment) or ("all" in args.experiment):
             print("Computing Uniform ensemble accuracy")
             uens_train_acc, _ = compute_ensemble_accuracy(nets_list, train_dl, n_classes,  uniform_weights=True, device=device)
             uens_test_acc, _ = compute_ensemble_accuracy(nets_list, test_dl, n_classes, uniform_weights=True, device=device)
 
-            logger.debug("Uniform ensemble (Train acc): %f" % uens_train_acc)
-            logger.debug("Uniform ensemble (Test acc): %f" % uens_test_acc)
+            logger.info("Uniform ensemble (Train acc): %f" % uens_train_acc)
+            logger.info("Uniform ensemble (Test acc): %f" % uens_test_acc)
 
             trials_res[trial]["Uniform ensemble (Train acc)"] = uens_train_acc
             trials_res[trial]["Uniform ensemble (Test acc)"] = uens_test_acc
@@ -660,8 +953,8 @@ def run_exp(n):
             print("Computing FedAvg accuracy")
             avg_train_acc, avg_test_acc, _, _ = compute_fedavg_accuracy(nets_list, train_dl, test_dl, traindata_cls_counts, n_classes, device=device)
 
-            logger.debug("FedAvg (Train acc): %f" % avg_train_acc)
-            logger.debug("FedAvg (Test acc): %f" % avg_test_acc)
+            logger.info("FedAvg (Train acc): %f" % avg_train_acc)
+            logger.info("FedAvg (Test acc): %f" % avg_test_acc)
 
             trials_res[trial]["FedAvg (Train acc)"] = avg_train_acc
             trials_res[trial]["FedAvg (Test acc)"] = avg_test_acc
@@ -670,60 +963,155 @@ def run_exp(n):
             print("Computing hungarian matching")
             start = datetime.datetime.now()
 
-            KL_regs = [0, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10]
+            ##KL_regs = [0, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1]
+            KL_regs = [0, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1]
+            KL_regs_supple = [0.2, 0.3, 0.4, 0.6, 0.7, 0.8, 0.9]
 
             best_reg = 0
             comp = 0
           
-            for KL_reg in KL_regs:
+            if KL_regs_supple is not None and trial == 0:
+                log_dir = os.path.join(log_dir, "supple")
+            if not os.path.exists(log_dir):
+                mkdirs(log_dir)
+
+            for KL_reg in KL_regs_supple:
+            #for KL_reg in KL_regs:
                 start = datetime.datetime.now()
 
                 trials_res[trial]["pdm_KL_reg "+str(KL_reg)] = {}
 
                 if args.model == "fcnet":
                     res = compute_pdm_matching_multilayer(
-                        nets_list, train_dl, test_dl, traindata_cls_counts, args.net_config[-1], it=args.iter_epochs,
+                        nets_list, train_dl, test_dl, traindata_cls_counts, n_classes, it=args.iter_epochs,
                         sigma=args.pdm_sig,
                         sigma0=args.pdm_sig0, gamma=args.pdm_gamma, device=device, KL_reg=KL_reg, unlimi=True
                     )
                 else:
                     res = BBP_MAP(nets_list, model_meta_data, layer_type, net_dataidx_map,
-                                  traindata_cls_counts, averaging_weights, args, args.net_config[-1], it=args.iter_epochs,
+                                  traindata_cls_counts, averaging_weights, args, n_classes, it=args.iter_epochs,
                                   sigma=args.pdm_sig, sigma0=args.pdm_sig0, gamma=args.pdm_gamma,
                                   device=device, KL_reg=KL_reg, unlimi=True)
 
                 end = datetime.datetime.now()
-                timing = (end - start).seconds
 
-                weights = res['weights']
-                logger.debug("****** PDM_KL matching ******** ")
-                logger.debug("Best Sigma0: %s. Best sigma: %s Best gamma: %s. Best Test accuracy: %s. Train acc: %s. \n"
+                logger.info("****** PDM_KL matching ******** ")
+                logger.info("Best Sigma0: %s. Best sigma: %s Best gamma: %s. Best Test accuracy: %s. Train acc: %s. \n"
                           % (str(res['sigma0']), str(res['sigma']), str(res['gamma']), str(res['test_accuracy']), str(res['train_accuracy'])))
-                logger.debug("PDM_KL log: %s " % str(res))
+                # logger.info("PDM_KL log: %s " % str(res))
 
                 trials_res[trial]["pdm_KL_reg "+str(KL_reg)]["Best Result"] = {"Best Sigma0": res['sigma0'], "Best sigma": res['sigma'],
                                                          "Best gamma": res['gamma'], "Best Test accuracy": res['test_accuracy'],
                                                          "Train acc": res['train_accuracy']}
                 trials_res[trial]["pdm_KL_reg "+str(KL_reg)]["shape"] = res['shapes']
+
+                logger.info("****** Save the matching weights ********")
+                weights = res['weights']
+                matching_weights_save_path = os.path.join(args.weight_dir, "matched_model_KL " + str(KL_reg) + ".pkl")
+                save_matching_weights(weights, args, matching_weights_save_path)
+                # pdb.set_trace()
                 trials_res[trial]["pdm_KL_reg "+str(KL_reg)]["PDM log"] = str(res)
+                # stats_layers = weights_prob_selfI_stats(weights, layer_type, res['sigma0'], args)
+                # prob_layers = stats_layers['probability']
+                # selfI_layers = stats_layers['self information']
+                # trials_res[trial]["pdm_KL_reg " + str(KL_reg)]['prob mean layers'] = np.mean(prob_layers, axis=1)
+                # trials_res[trial]["pdm_KL_reg " + str(KL_reg)]['prob std layers'] = np.std(prob_layers, axis=1)
+                # trials_res[trial]["pdm_KL_reg " + str(KL_reg)]['selfI mean layers'] = np.mean(selfI_layers, axis=1)
+                # trials_res[trial]["pdm_KL_reg " + str(KL_reg)]['selfI std layers'] = np.std(selfI_layers, axis=1)
 
-                stats_layers = weights_prob_selfI_stats(weights, layer_type, res['sigma0'], args)
-                prob_layers = stats_layers['probability']
-                selfI_layers = stats_layers['self information']
-                trials_res[trial]["pdm_KL_reg " + str(KL_reg)]['prob mean layers'] = np.mean(prob_layers, axis=1)
-                trials_res[trial]["pdm_KL_reg " + str(KL_reg)]['prob std layers'] = np.std(prob_layers, axis=1)
-                trials_res[trial]["pdm_KL_reg " + str(KL_reg)]['selfI mean layers'] = np.mean(selfI_layers, axis=1)
-                trials_res[trial]["pdm_KL_reg " + str(KL_reg)]['selfI std layers'] = np.std(selfI_layers, axis=1)
-
-                if best_test_acc > comp:
+                if res['test_accuracy'] > comp:
                     best_reg = KL_reg
-                    comp = best_test_acc
+                    comp = res['test_accuracy']
 
                 end = datetime.datetime.now()
                 timing = (end - start).seconds
                 trials_res[trial]["pdm_KL_reg "+str(KL_reg)]["timing"] = timing
 
             trials_res[trial]["best_reg"] = best_reg
+
+        if ("fedavg_comm" in args.experiment) or ("all" in args.experiment):
+            print("Computing FedAvg communication accuracy")
+            batch_weights = pdm_prepare_weights(nets_list, device=device)
+            total_data_points = sum([len(net_dataidx_map[r]) for r in range(args.n_nets)])
+            fed_avg_freqs = [len(net_dataidx_map[r]) / total_data_points for r in range(args.n_nets)]
+            logger.info("Total data points: {}".format(total_data_points))
+            logger.info("Freq of FedAvg: {}".format(fed_avg_freqs))
+            #pdb.set_trace()
+            averaged_weights = []
+            num_layers = len(batch_weights[0])
+            for i in range(num_layers):
+                avegerated_weight = sum([b[i] * fed_avg_freqs[j] for j, b in enumerate(batch_weights)])
+                averaged_weights.append(avegerated_weight)
+
+            comm_init_batch_weights = [copy.deepcopy(averaged_weights) for _ in range(args.n_nets)]
+
+            if args.model == "fcnet":
+                train_acc, test_acc, _, _ = compute_pdm_net_accuracy(averaged_weights, 
+                                        train_dl, 
+                                        test_dl, 
+                                        n_classes, 
+                                        device=device)
+                trials_res[trial]["fedavg (Test acc)"] = test_acc
+            else:
+                test_dice_coeff_comms = fedavg_comm(comm_init_batch_weights, model_meta_data, layer_type, 
+                            net_dataidx_map, 
+                            averaging_weights, args, 
+                            train_dl,
+                            test_dl,
+                            comm_round=args.fedavg_comm_round,
+                            device=device)
+                trials_res[trial]["fedavg_comm (Test acc comms)"] = test_dice_coeff_comms
+
+
+            #logger.debug("fedavg_comm (Train dice_coeff): %f" % train_dice_coeff)
+            #logger.debug("fedavg_comm (Test dice_coeff comms): %f" % test_dice_coeff_comms)
+
+            #trials_res[trial]["fedavg_comm (Train dice_coeff)"] = train_dice_coeff
+            
+            trial_path += '_fedavg_comm'
+
+        if ("fedprox_comm" in args.experiment) or ("all" in args.experiment):
+            print("Computing FedProx communication accuracy")
+            batch_weights = pdm_prepare_weights(nets_list, device=device)
+            total_data_points = sum([len(net_dataidx_map[r]) for r in range(args.n_nets)])
+            fed_avg_freqs = [len(net_dataidx_map[r]) / total_data_points for r in range(args.n_nets)]
+            logger.info("Total data points: {}".format(total_data_points))
+            logger.info("Freq of FedAvg: {}".format(fed_avg_freqs))
+
+            averaged_weights = []
+            num_layers = len(batch_weights[0])
+            for i in range(num_layers):
+                avegerated_weight = sum([b[i] * fed_avg_freqs[j] for j, b in enumerate(batch_weights)])
+                averaged_weights.append(avegerated_weight)
+
+            comm_init_batch_weights = [copy.deepcopy(averaged_weights) for _ in range(args.n_nets)]
+
+            if args.model == "fcnet":
+                train_acc, test_acc, _, _ = compute_pdm_net_accuracy(averaged_weights, 
+                                        train_dl, 
+                                        test_dl, 
+                                        n_classes, 
+                                        device=device)
+                trials_res[trial]["fedprox (Test acc)"] = test_acc
+            else:
+                test_dice_coeff_comms = fedprox_comm(comm_init_batch_weights, model_meta_data, layer_type, 
+                            net_dataidx_map, 
+                            averaging_weights, args, 
+                            train_dl,
+                            test_dl,
+                            comm_round=args.fedavg_comm_round,
+                            device=device)
+                trials_res[trial]["fedprox_comm (Test dice_coeff comms)"] = test_dice_coeff_comms
+
+               
+            #start = datetime.datetime.now()
+            
+
+            #logger.debug("fedavg_comm (Train dice_coeff): %f" % train_dice_coeff)
+            #logger.debug("fedavg_comm (Test dice_coeff comms): %f" % test_dice_coeff_comms)
+
+            #trials_res[trial]["fedavg_comm (Train dice_coeff)"] = train_dice_coeff
+            trial_path += '_fedprox_comm'
 
         if ("pdm_I" in args.experiment) or ("all" in args.experiment):
             
@@ -752,11 +1140,11 @@ def run_exp(n):
                 )
                 end = datetime.datetime.now()
                 timing = (end - start).seconds
-                logger.debug("****** PDM_I matching ******** ")
-                logger.debug("Best Sigma0: %s. Best sigma: %s Best gamma: %s. Best Test accuracy: %s. Train acc: %s. \n"
+                logger.info("****** PDM_I matching ******** ")
+                logger.info("Best Sigma0: %s. Best sigma: %s Best gamma: %s. Best Test accuracy: %s. Train acc: %s. \n"
                           % (str(best_sigma0), str(best_sigma), str(best_gamma), str(best_test_acc), str(best_train_acc)))
 
-                logger.debug("PDM_I log: %s " % str(res))
+                logger.info("PDM_I log: %s " % str(res))
 
                 trials_res[trial]["pdm_I_reg "+str(I_reg)]["Best Result"] = {"Best Sigma0": best_sigma0, "Best sigma": best_sigma, 
                                                          "Best gamma": best_gamma, "Best Test accuracy": best_test_acc,
@@ -803,11 +1191,11 @@ def run_exp(n):
                 )
                 end = datetime.datetime.now()
                 timing = (end - start).seconds
-                logger.debug("****** PDM_neg_I matching ******** ")
-                logger.debug("Best Sigma0: %s. Best sigma: %s Best gamma: %s. Best Test accuracy: %s. Train acc: %s. \n"
+                logger.info("****** PDM_neg_I matching ******** ")
+                logger.info("Best Sigma0: %s. Best sigma: %s Best gamma: %s. Best Test accuracy: %s. Train acc: %s. \n"
                           % (str(best_sigma0), str(best_sigma), str(best_gamma), str(best_test_acc), str(best_train_acc)))
 
-                logger.debug("PDM_neg_I log: %s " % str(res))
+                logger.info("PDM_neg_I log: %s " % str(res))
 
                 trials_res[trial]["pdm_neg_I_reg "+str(I_reg)]["Best Result"] = {"Best Sigma0": best_sigma0, "Best sigma": best_sigma, 
                                                          "Best gamma": best_gamma, "Best Test accuracy": best_test_acc,
@@ -853,11 +1241,11 @@ def run_exp(n):
                 )
                 end = datetime.datetime.now()
                 timing = (end - start).seconds
-                logger.debug("****** PDM_coff matching ******** ")
-                logger.debug("Best Sigma0: %s. Best sigma: %s Best gamma: %s. Best Test accuracy: %s. Train acc: %s. \n"
+                logger.info("****** PDM_coff matching ******** ")
+                logger.info("Best Sigma0: %s. Best sigma: %s Best gamma: %s. Best Test accuracy: %s. Train acc: %s. \n"
                           % (str(best_sigma0), str(best_sigma), str(best_gamma), str(best_test_acc), str(best_train_acc)))
 
-                logger.debug("PDM_coff log: %s " % str(res))
+                logger.info("PDM_coff log: %s " % str(res))
 
                 trials_res[trial]["pdm_coff 1-"+str(coff)]["Best Result"] = {"Best Sigma0": best_sigma0, "Best sigma": best_sigma, 
                                                          "Best gamma": best_gamma, "Best Test accuracy": best_test_acc,
@@ -902,11 +1290,11 @@ def run_exp(n):
                 )
                 end = datetime.datetime.now()
                 timing = (end - start).seconds
-                logger.debug("****** PDM_fix matching ******** ")
-                logger.debug("Best Sigma0: %s. Best sigma: %s Best gamma: %s. Best Test accuracy: %s. Train acc: %s. \n"
+                logger.info("****** PDM_fix matching ******** ")
+                logger.info("Best Sigma0: %s. Best sigma: %s Best gamma: %s. Best Test accuracy: %s. Train acc: %s. \n"
                           % (str(best_sigma0), str(best_sigma), str(best_gamma), str(best_test_acc), str(best_train_acc)))
 
-                logger.debug("PDM_fix log: %s " % str(res))
+                logger.info("PDM_fix log: %s " % str(res))
 
                 trials_res[trial]["pdm_fix "+str(coff)]["Best Result"] = {"Best Sigma0": best_sigma0, "Best sigma": best_sigma, 
                                                          "Best gamma": best_gamma, "Best Test accuracy": best_test_acc,
@@ -927,10 +1315,10 @@ def run_exp(n):
 
         if ("pdm_iterative" in args.experiment) or ("all" in args.experiment):
             print("Running Iterative PDM matching procedure")
-            logger.debug("Running Iterative PDM matching procedure")
+            logger.info("Running Iterative PDM matching procedure")
 
             for KL_reg in KL_regs:
-                logger.debug("Parameter setting: sigma0 = %f, sigma = %f, gamma = %f" % (args.pdm_sig0, args.pdm_sig, args.pdm_gamma))
+                logger.info("Parameter setting: sigma0 = %f, sigma = %f, gamma = %f" % (args.pdm_sig0, args.pdm_sig, args.pdm_gamma))
 
                 iter_nets = copy.deepcopy(nets)
                 assignment = None
@@ -950,10 +1338,10 @@ def run_exp(n):
                         sigma, sigma0, gamma, it, old_assignment=assignment, device=device, KL_reg=0
                     )
 
-                    logger.debug("Communication: %d, Train acc: %f, Test acc: %f, Shapes: %s" % (comm_round, train_acc, test_acc, str(new_shape)))
-                    logger.debug('CENTRAL MODEL CONFUSION MATRIX')
-                    logger.debug('Train data confusion matrix: \n %s' % str(conf_matrix_train))
-                    logger.debug('Test data confusion matrix: \n %s' % str(conf_matrix_test))
+                    logger.info("Communication: %d, Train acc: %f, Test acc: %f, Shapes: %s" % (comm_round, train_acc, test_acc, str(new_shape)))
+                    logger.info('CENTRAL MODEL CONFUSION MATRIX')
+                    logger.info('Train data confusion matrix: \n %s' % str(conf_matrix_train))
+                    logger.info('Test data confusion matrix: \n %s' % str(conf_matrix_test))
 
                     iter_nets = load_new_state(iter_nets, net_weights_new)
 
@@ -972,10 +1360,12 @@ def run_exp(n):
                     reg_iter *= args.reg_fac
 
                 
-        logger.debug("Trial %d completed" % trial)
-        logger.debug("#"*100)
+        logger.info("Trial %d completed" % trial)
+        logger.info("#"*100)
 
-        with open(os.path.join(log_dir, 'trial'+str(trial)+'.json'), 'w') as f:
+        trial_path += '.json'
+
+        with open(os.path.join(log_dir, trial_path), 'w') as f:
             json.dump(trials_res[trial], f) 
 
     with open(os.path.join(log_dir, 'trials_res.json'), 'w') as f:
@@ -1012,29 +1402,15 @@ def abli_exp(n=[10], dataset="mnist"):
         #n_list[0] = 2
         n_list = n
 
-    #args.experiments = "u-ensemble,pdm,pdm_KL"
-    args.dataset = dataset
     args.datadir = os.path.join("data", dataset)
-    #if dataset == "mnist":
-        #args.net_config = "784, 100, 10"
-    #else:
-        #args.net_config = "3071, 100, 10"
-    
-    #args.epochs = 10
-    #args.reg = 1e-6
-    #args.lr_decay = 0.99
-    #args.iter_epochs = 5
-    #args.device = torch.device(device if torch.cuda.is_available() else "cpu")
-
-    #now = datetime.datetime.now()
-    #KL_regs = [0, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10]
 
     for partition in partitions:
         #logdir = os.path.join('log_abli', now.strftime("%Y-%m-%d %H"),
         #                      dataset, partition)
+        
         logdir = os.path.join('KL_regs_bst_hyp_unlimi',
-                              dataset, partition)
-        args.loaddir = os.path.join('saved_weights', dataset, partition)
+                              dataset, partition, args.model)
+        args.loaddir = os.path.join('saved_weights', dataset, partition, args.model)
         args.logdir = logdir
         args.partition = partition
         print("Partition type is ", partition)
@@ -1061,6 +1437,7 @@ def abli_exp(n=[10], dataset="mnist"):
         with contextlib.closing(Pool(args.num_pool_workers)) as po:
             pool_results = po.map_async(run_exp, (n for n in n_list))
             results_list = pool_results.get()
+        #run_exp(n_list[0])
 
         for n, result in zip(n_list, results_list):
             abli_res[n] = result
