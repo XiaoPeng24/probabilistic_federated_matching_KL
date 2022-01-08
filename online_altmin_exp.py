@@ -82,6 +82,8 @@ def get_parser():
                         help="Do we need retrain the init weights?")
     parser.add_argument('--train_prox', type=bool, required=False, default=False,
                         help="Do we train the network in prox way")
+    parser.add_argument('--prox_mu', type=float, required=False, default=0,
+                        help="the coefficients of fedprox, if the train_prox is true, this is required")
     parser.add_argument('--no-batchnorm', type=bool, default=False,
                         help='disables batchnormalization (default: False)')
     ## online training settings
@@ -176,6 +178,8 @@ def train_net(net_id, net, train_dataloader, test_dataloader, args, reg_base_wei
         mu = args.mu
         mu_max = 10 * args.mu
 
+    global_mods = net
+
     global_weight_collector = []
     for param_idx, (key_name, param) in enumerate(net.state_dict().items()):
         global_weight_collector.append(param)
@@ -198,9 +202,9 @@ def train_net(net_id, net, train_dataloader, test_dataloader, args, reg_base_wei
                                      n_iter=args.n_iter_codes, lr=args.lr_codes)
 
                 # (3) Update weights
-                update_last_layer_(net[-1], codes[-1], target, criterion, n_iter=args.n_iter_weights)
+                update_last_layer_(net[-1], codes[-1], target, criterion, n_iter=args.n_iter_weights, args, global_mods[-1])
 
-                update_hidden_weights_adam_(net, x, codes, lambda_w=args.lambda_w, n_iter=args.n_iter_weights)
+                update_hidden_weights_adam_(net, x, codes, lambda_w=args.lambda_w, n_iter=args.n_iter_weights, args, global_mods)
 
                 loss = criterion(outputs, target)
 
@@ -580,6 +584,14 @@ def local_retrain(local_datasets, weights, args, mode="bottom-up", freezing_inde
     logger.info('>> Pre-Training Training accuracy: %f' % train_acc)
     logger.info('>> Pre-Training Test accuracy: %f' % test_acc)
 
+    if args.train_online_altmin:
+        # Expose model modules that has_codes
+        matched_cnn = get_mods(matched_cnn, optimizer='Adam', optimizer_params={'lr': args.lr_weights},
+                       scheduler=lambda epoch: 1 / 2 ** (epoch // args.lr_half_epochs))
+        matched_cnn[-1].optimizer.param_groups[0]['lr'] = args.lr_out
+        mu = args.mu
+        mu_max = 10 * args.mu
+
     if mode != "block-wise":
         if freezing_index < (len(weights) - 2):
             retrain_epochs = args.retrain_epochs
@@ -590,24 +602,48 @@ def local_retrain(local_datasets, weights, args, mode="bottom-up", freezing_inde
 
     for epoch in range(retrain_epochs):
         epoch_loss_collector = []
-        for batch_idx, (x, target) in enumerate(train_dl_local):
+
+        for batch_idx, (x, target) in enumerate(train_dataloader):
             x, target = x.to(device), target.to(device)
+            # pdb.set_trace()
 
-            optimizer_fine_tune.zero_grad()
-            x.requires_grad = True
-            target.requires_grad = False
-            target = target.long()
+            if args.train_online_altmin:
+                with torch.no_grad():
+                    outputs, codes = get_codes(matched_cnn, x)
 
-            out = matched_cnn(x)
-            loss = criterion_fine_tune(out, target)
-            epoch_loss_collector.append(loss.item())
+                # (2) Update codes
+                codes = update_codes(codes, matched_cnn, target, criterion_fine_tune, mu, lambda_c=args.lambda_c,
+                                     n_iter=args.n_iter_codes, lr=args.lr_codes)
 
-            loss.backward()
-            optimizer_fine_tune.step()
+                # (3) Update weights
+                update_last_layer_(matched_cnn[-1], codes[-1], target, criterion_fine_tune, n_iter=args.n_iter_weights)
 
-        # logger.info('Epoch: %d Loss: %f L2 loss: %f' % (epoch, loss.item(), reg*l2_reg))
+                update_hidden_weights_adam_(matched_cnn, x, codes, lambda_w=args.lambda_w, n_iter=args.n_iter_weights)
+
+                loss = criterion_fine_tune(outputs, target)
+                epoch_loss_collector.append(loss.item())
+
+                # Increment mu
+                if mu < mu_max:
+                    mu = mu + args.d_mu
+            else:
+                optimizer_fine_tune.zero_grad()
+                x.requires_grad = True
+                target.requires_grad = False
+                target = target.long()
+
+                out = matched_cnn(x)
+                loss = criterion_fine_tune(out, target)
+                epoch_loss_collector.append(loss.item())
+
+                loss.backward()
+                optimizer_fine_tune.step()
+
+                cnt += 1
+                losses.append(loss.item())
+
         epoch_loss = sum(epoch_loss_collector) / len(epoch_loss_collector)
-        logger.info('Epoch: %d Epoch Avg Loss: %f' % (epoch, epoch_loss))
+        logger.info('Epoch: %d Loss: %f' % (epoch, epoch_loss))
 
     train_acc = compute_accuracy(matched_cnn, train_dl_local, device=device)
     test_acc, conf_matrix = compute_accuracy(matched_cnn, test_dl_local, get_confusion_matrix=True, device=device)

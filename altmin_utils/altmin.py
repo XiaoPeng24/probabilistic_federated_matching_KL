@@ -266,16 +266,22 @@ def update_codes(codes, model_mods, targets, criterion, mu, lambda_c, n_iter, lr
     return codes
 
 
-def update_last_layer_(mod_out, inputs, targets, criterion, n_iter):
+def update_last_layer_(mod_out, inputs, targets, criterion, n_iter, args, global_mod_out=None):
     for it in range(n_iter):
         mod_out.optimizer.zero_grad()
         outputs = mod_out(inputs)
         loss = criterion(outputs, targets)
+        if args.train_prox:
+            #########################we implement FedProx Here###########################
+            fed_prox_reg = 0.0
+            fed_prox_reg += ((args.prox_mu / 2) * torch.norm((mod_out - global_mod_out)) ** 2)
+            loss += fed_prox_reg
+            ##############################################################################
         loss.backward()
         mod_out.optimizer.step()
 
 
-def update_hidden_weights_adam_(model_mods, inputs, codes, lambda_w, n_iter):
+def update_hidden_weights_adam_(model_mods, inputs, codes, lambda_w, n_iter, args, global_model_mods=None):
     id_codes = [i for i,m in enumerate(model_mods) if hasattr(m, 'has_codes') and getattr(m, 'has_codes')]
 
     if hasattr(model_mods, 'n_inputs'):
@@ -295,6 +301,12 @@ def update_hidden_weights_adam_(model_mods, inputs, codes, lambda_w, n_iter):
             loss = F.mse_loss(lin(nmod(c_in)), c_out.detach())
             if lambda_w > 0.0:
                 loss += lambda_w*lin.weight.abs().mean()
+            if args.train_prox:
+                #########################we implement FedProx Here###########################
+                fed_prox_reg = 0.0
+                fed_prox_reg += ((args.prox_mu / 2) * torch.norm((lin - global_model_mods[idx])) ** 2)
+                loss += fed_prox_reg
+                ##############################################################################
             loss.backward()
             lin.optimizer.step()
 

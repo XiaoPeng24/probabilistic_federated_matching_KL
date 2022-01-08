@@ -105,6 +105,9 @@ def init_nets(net_configs, dropout_p, n_nets, args):
             output_size = net_configs[-1]
             hidden_sizes = net_configs[1:-1]
             net = FcNet(input_size, hidden_sizes, output_size, dropout_p)
+        elif args.model == "ffnet":
+            net = FFNet(net_configs[0], n_hiddens=args.n_hiddens, n_hidden_layers=args.n_hidden_layers,
+                  batchnorm=not args.no_batchnorm, bias=False)
         elif args.model == "simple-cnn":
             net = SimpleCNN(input_dim=(16 * 5 * 5), hidden_dims=[120, 84], output_dim=10)
         elif args.model == "moderate-cnn":
