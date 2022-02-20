@@ -1,4 +1,7 @@
-<<<<<<< HEAD
+## Federated learning via manifold learning
+1. UMAP dimension reduction experiment
+
+
 ## Probabilistic Federated Neural Matching
 
 
@@ -77,4 +80,3 @@ Some of the output is printed on the terminal. However, majority of the informat
 ```
 =======
 # probabilistic_federated_matching_KL
->>>>>>> 869005511fc63114b4eae38fb186c50f23039bd5
