@@ -1,6 +1,6 @@
 import numpy as np
 from scipy.optimize import linear_sum_assignment
-from lapsolver import solve_dense
+# from lapsolver import solve_dense
 import pdb
 
 from matching.kl_cost import compute_KL3_cost, compute_KL2_cost
@@ -89,8 +89,8 @@ def matching_upd_j(weights_j, global_weights, sigma_inv_j, global_sigmas, prior_
             I_cost = I_reg*self_info_cost(global_weights, weights_j, global_sigmas, sigma_inv_j, prior_mean_norm, prior_inv_sigma,
                              popularity_counts, gamma, J)
 
-    #row_ind, col_ind = linear_sum_assignment(-full_cost+KL_cost+I_cost)
-    row_ind, col_ind = solve_dense(-full_cost+KL_cost+I_cost)
+    row_ind, col_ind = linear_sum_assignment(-full_cost+KL_cost+I_cost)
+    # row_ind, col_ind = solve_dense(-full_cost+KL_cost+I_cost)
 
     assignment_j = []
 

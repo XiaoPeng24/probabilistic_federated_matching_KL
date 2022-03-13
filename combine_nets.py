@@ -14,7 +14,7 @@ from matching.pfnm_communication import build_init as pdm_build_init
 from itertools import product
 from sklearn.metrics import confusion_matrix
 from utils import *
-from KL_reg_unlimi import local_retrain
+# from KL_reg_unlimi import local_retrain
 import pdb
 
 def prepare_weight_matrix(n_classes, weights: dict):
@@ -307,7 +307,7 @@ def weights_prob_selfI_stats(weights, layer_type, sigma0, args):
     """
 
     # get the weight_bias
-    n_layers = int(len(weights / 2))
+    n_layers = int(len(weights) / 2)
 
     stats_layers = {}
     stats_layers['probability'] = []
@@ -342,7 +342,7 @@ def weights_prob_selfI_stats(weights, layer_type, sigma0, args):
     return  stats_layers
 
 def compute_pdm_net_accuracy(weights, train_dl, test_dl, n_classes, device="cpu"):
-
+    # pdb.set_trace()
     dims = []
     dims.append(weights[0].shape[0])
 
@@ -522,7 +522,7 @@ def compute_pdm_matching_multilayer(models, train_dl, test_dl, cls_freqs, n_clas
     for gamma, sigma, sigma0 in product(gammas, sigmas, sigma0s):
         print("Gamma: ", gamma, "Sigma: ", sigma, "Sigma0: ", sigma0)
 
-        hungarian_weights = pdm_multilayer_group_descent(
+        hungarian_weights, assignments = pdm_multilayer_group_descent(
             batch_weights, sigma0_layers=sigma0, sigma_layers=sigma, batch_frequencies=batch_freqs, it=it, gamma_layers=gamma, 
             KL_reg=KL_reg, unlimi=unlimi, use_freq=use_freq
         )
@@ -701,6 +701,322 @@ def BBP_MAP(nets_list, model_meta_data, layer_type, net_dataidx_map, traindata_c
 
     return res
 
+def local_retrain(local_datasets, weights, args, mode="bottom-up", freezing_index=0, ori_assignments=None,
+                  device="cpu"):
+    """
+    freezing_index :: starting from which layer we update the model weights,
+                      i.e. freezing_index = 0 means we train the whole network normally
+                           freezing_index = len(model) means we freez the entire network
+    """
+    if args.model == "lenet":
+        num_filters = [weights[0].shape[0], weights[2].shape[0]]
+        kernel_size = 5
+        input_dim = weights[4].shape[0]
+        hidden_dims = [weights[4].shape[1]]
+        output_dim = weights[-1].shape[0]
+        logger.info("Num filters: {}, Input dim: {}, hidden_dims: {}, output_dim: {}".format(num_filters, input_dim,
+                                                                                             hidden_dims, output_dim))
+
+        matched_cnn = LeNetContainer(
+            num_filters=num_filters,
+            kernel_size=kernel_size,
+            input_dim=input_dim,
+            hidden_dims=hidden_dims,
+            output_dim=output_dim)
+    elif args.model == "vgg":
+        matched_shapes = [w.shape for w in weights]
+        matched_cnn = matched_vgg11(matched_shapes=matched_shapes)
+    elif args.model == "simple-cnn":
+        # input_channel, num_filters, kernel_size, input_dim, hidden_dims, output_dim=10):
+        # [(9, 75), (9,), (19, 225), (19,), (475, 123), (123,), (123, 87), (87,), (87, 10), (10,)]
+        if args.dataset in ("cifar10", "cinic10"):
+            input_channel = 3
+        elif args.dataset == "mnist":
+            input_channel = 1
+
+        num_filters = [weights[0].shape[0], weights[2].shape[0]]
+        input_dim = weights[4].shape[0]
+        hidden_dims = [weights[4].shape[1], weights[6].shape[1]]
+        matched_cnn = SimpleCNNContainer(input_channel=input_channel,
+                                         num_filters=num_filters,
+                                         kernel_size=5,
+                                         input_dim=input_dim,
+                                         hidden_dims=hidden_dims,
+                                         output_dim=10)
+    elif args.model == "moderate-cnn":
+        # [(35, 27), (35,), (68, 315), (68,), (132, 612), (132,), (132, 1188), (132,),
+        # (260, 1188), (260,), (260, 2340), (260,),
+        # (4160, 1025), (1025,), (1025, 515), (515,), (515, 10), (10,)]
+        if mode not in ("block-wise", "squeezing"):
+            num_filters = [weights[0].shape[0], weights[2].shape[0], weights[4].shape[0], weights[6].shape[0],
+                           weights[8].shape[0], weights[10].shape[0]]
+            input_dim = weights[12].shape[0]
+            hidden_dims = [weights[12].shape[1], weights[14].shape[1]]
+
+            input_dim = weights[12].shape[0]
+        elif mode == "block-wise":
+            # for block-wise retraining the `freezing_index` becomes a range of indices
+            # so at here we need to generate a unfreezing list:
+            __unfreezing_list = []
+            for fi in freezing_index:
+                __unfreezing_list.append(2 * fi - 2)
+                __unfreezing_list.append(2 * fi - 1)
+
+            # we need to do two changes here:
+            # i) switch the number of filters in the freezing indices block to the original size
+            # ii) cut the correspoidng color channels
+            __fixed_indices = set([i * 2 for i in range(6)])  # 0, 2, 4, 6, 8, 10
+            dummy_model = ModerateCNN()
+
+            num_filters = []
+            for pi, param in enumerate(dummy_model.parameters()):
+                if pi in __fixed_indices:
+                    if pi in __unfreezing_list:
+                        num_filters.append(param.size()[0])
+                    else:
+                        num_filters.append(weights[pi].shape[0])
+            del dummy_model
+            logger.info("################ Num filters for now are : {}".format(num_filters))
+            # note that we hard coded index of the last conv layer here to make sure the dimension is compatible
+            if freezing_index[0] != 6:
+                # if freezing_index[0] not in (6, 7):
+                input_dim = weights[12].shape[0]
+            else:
+                # we need to estimate the output shape here:
+                shape_estimator = ModerateCNNContainerConvBlocks(num_filters=num_filters)
+                dummy_input = torch.rand(1, 3, 32, 32)
+                estimated_output = shape_estimator(dummy_input)
+                # estimated_shape = (estimated_output[1], estimated_output[2], estimated_output[3])
+                input_dim = estimated_output.view(-1).size()[0]
+
+            if (freezing_index[0] <= 6) or (freezing_index[0] > 8):
+                hidden_dims = [weights[12].shape[1], weights[14].shape[1]]
+            else:
+                dummy_model = ModerateCNN()
+                for pi, param in enumerate(dummy_model.parameters()):
+                    if pi == 2 * freezing_index[0] - 2:
+                        _desired_shape = param.size()[0]
+                if freezing_index[0] == 7:
+                    hidden_dims = [_desired_shape, weights[14].shape[1]]
+                elif freezing_index[0] == 8:
+                    hidden_dims = [weights[12].shape[1], _desired_shape]
+        elif mode == "squeezing":
+            pass
+
+        if args.dataset in ("cifar10", "cinic10"):
+            if mode == "squeezing":
+                matched_cnn = ModerateCNN()
+            else:
+                matched_cnn = ModerateCNNContainer(3,
+                                                   num_filters,
+                                                   kernel_size=3,
+                                                   input_dim=input_dim,
+                                                   hidden_dims=hidden_dims,
+                                                   output_dim=10)
+        elif args.dataset == "mnist":
+            matched_cnn = ModerateCNNContainer(1,
+                                               num_filters,
+                                               kernel_size=3,
+                                               input_dim=input_dim,
+                                               hidden_dims=hidden_dims,
+                                               output_dim=10)
+
+    new_state_dict = {}
+    model_counter = 0
+    n_layers = int(len(weights) / 2)
+
+    # we hardcoded this for now: will probably make changes later
+    # if mode != "block-wise":
+    if mode not in ("block-wise", "squeezing"):
+        __non_loading_indices = []
+    else:
+        if mode == "block-wise":
+            if freezing_index[0] != n_layers:
+                __non_loading_indices = copy.deepcopy(__unfreezing_list)
+                __non_loading_indices.append(
+                    __unfreezing_list[-1] + 1)  # add the index of the weight connects to the next layer
+            else:
+                __non_loading_indices = copy.deepcopy(__unfreezing_list)
+        elif mode == "squeezing":
+            # please note that at here we need to reconstruct the entire local network and retrain it
+            __non_loading_indices = [i for i in range(len(weights))]
+
+    def __reconstruct_weights(weight, assignment, layer_ori_shape, matched_num_filters=None, weight_type="conv_weight",
+                              slice_dim="filter"):
+        # what contains in the param `assignment` is the assignment for a certain layer, a certain worker
+        """
+        para:: slice_dim: for reconstructing the conv layers, for each of the three consecutive layers, we need to slice the
+               filter/kernel to reconstruct the first conv layer; for the third layer in the consecutive block, we need to
+               slice the color channel
+        """
+        if weight_type == "conv_weight":
+            if slice_dim == "filter":
+                res_weight = weight[assignment, :]
+            elif slice_dim == "channel":
+                _ori_matched_shape = list(copy.deepcopy(layer_ori_shape))
+                _ori_matched_shape[1] = matched_num_filters
+                trans_weight = trans_next_conv_layer_forward(weight, _ori_matched_shape)
+                sliced_weight = trans_weight[assignment, :]
+                res_weight = trans_next_conv_layer_backward(sliced_weight, layer_ori_shape)
+        elif weight_type == "bias":
+            res_weight = weight[assignment]
+        elif weight_type == "first_fc_weight":
+            # NOTE: please note that in this case, we pass the `estimated_shape` to `layer_ori_shape`:
+            __ori_shape = weight.shape
+            res_weight = weight.reshape(matched_num_filters, layer_ori_shape[2] * layer_ori_shape[3] * __ori_shape[1])[
+                         assignment, :]
+            res_weight = res_weight.reshape((len(assignment) * layer_ori_shape[2] * layer_ori_shape[3], __ori_shape[1]))
+        elif weight_type == "fc_weight":
+            if slice_dim == "filter":
+                res_weight = weight.T[assignment, :]
+                # res_weight = res_weight.T
+            elif slice_dim == "channel":
+                res_weight = weight[assignment, :].T
+        return res_weight
+
+    # handle the conv layers part which is not changing
+    for param_idx, (key_name, param) in enumerate(matched_cnn.state_dict().items()):
+        if (param_idx in __non_loading_indices) and (freezing_index[0] != n_layers):
+            # we need to reconstruct the weights here s.t.
+            # i) shapes of the weights are euqal to the shapes of the weight in original model (before matching)
+            # ii) each neuron comes from the corresponding global neuron
+            _matched_weight = weights[param_idx]
+            _matched_num_filters = weights[__non_loading_indices[0]].shape[0]
+            #
+            # we now use this `_slice_dim` for both conv layers and fc layers
+            if __non_loading_indices.index(param_idx) != 2:
+                _slice_dim = "filter"  # please note that for biases, it doesn't really matter if we're going to use filter or channel
+            else:
+                _slice_dim = "channel"
+
+            if "conv" in key_name or "features" in key_name:
+                if "weight" in key_name:
+                    _res_weight = __reconstruct_weights(weight=_matched_weight, assignment=ori_assignments,
+                                                        layer_ori_shape=param.size(),
+                                                        matched_num_filters=_matched_num_filters,
+                                                        weight_type="conv_weight", slice_dim=_slice_dim)
+                    temp_dict = {key_name: torch.from_numpy(_res_weight.reshape(param.size()))}
+                elif "bias" in key_name:
+                    _res_bias = __reconstruct_weights(weight=_matched_weight, assignment=ori_assignments,
+                                                      layer_ori_shape=param.size(),
+                                                      matched_num_filters=_matched_num_filters,
+                                                      weight_type="bias", slice_dim=_slice_dim)
+                    temp_dict = {key_name: torch.from_numpy(_res_bias)}
+            elif "fc" in key_name or "classifier" in key_name:
+                if "weight" in key_name:
+                    if freezing_index[0] != 6:
+                        _res_weight = __reconstruct_weights(weight=_matched_weight, assignment=ori_assignments,
+                                                            layer_ori_shape=param.size(),
+                                                            matched_num_filters=_matched_num_filters,
+                                                            weight_type="fc_weight", slice_dim=_slice_dim)
+                        temp_dict = {key_name: torch.from_numpy(_res_weight)}
+                    else:
+                        # that's for handling the first fc layer that is connected to the conv blocks
+                        _res_weight = __reconstruct_weights(weight=_matched_weight, assignment=ori_assignments,
+                                                            layer_ori_shape=estimated_output.size(),
+                                                            matched_num_filters=_matched_num_filters,
+                                                            weight_type="first_fc_weight", slice_dim=_slice_dim)
+                        temp_dict = {key_name: torch.from_numpy(_res_weight.T)}
+                elif "bias" in key_name:
+                    _res_bias = __reconstruct_weights(weight=_matched_weight, assignment=ori_assignments,
+                                                      layer_ori_shape=param.size(),
+                                                      matched_num_filters=_matched_num_filters,
+                                                      weight_type="bias", slice_dim=_slice_dim)
+                    temp_dict = {key_name: torch.from_numpy(_res_bias)}
+        else:
+            if "conv" in key_name or "features" in key_name:
+                if "weight" in key_name:
+                    temp_dict = {key_name: torch.from_numpy(weights[param_idx].reshape(param.size()))}
+                elif "bias" in key_name:
+                    temp_dict = {key_name: torch.from_numpy(weights[param_idx])}
+            elif "fc" in key_name or "classifier" in key_name:
+                if "weight" in key_name:
+                    temp_dict = {key_name: torch.from_numpy(weights[param_idx].T)}
+                elif "bias" in key_name:
+                    temp_dict = {key_name: torch.from_numpy(weights[param_idx])}
+
+        new_state_dict.update(temp_dict)
+    matched_cnn.load_state_dict(new_state_dict)
+
+    for param_idx, param in enumerate(matched_cnn.parameters()):
+        if mode == "bottom-up":
+            # for this freezing mode, we freeze the layer before freezing index
+            if param_idx < freezing_index:
+                param.requires_grad = False
+        elif mode == "per-layer":
+            # for this freezing mode, we only unfreeze the freezing index
+            if param_idx not in (2 * freezing_index - 2, 2 * freezing_index - 1):
+                param.requires_grad = False
+        elif mode == "block-wise":
+            # for block-wise retraining the `freezing_index` becomes a range of indices
+            if param_idx not in __non_loading_indices:
+                param.requires_grad = False
+        elif mode == "squeezing":
+            pass
+
+    matched_cnn.to(device).train()
+    # start training last fc layers:
+    train_dl_local = local_datasets[0]
+    test_dl_local = local_datasets[1]
+
+    if mode != "block-wise":
+        if freezing_index < (len(weights) - 2):
+            optimizer_fine_tune = optim.SGD(filter(lambda p: p.requires_grad, matched_cnn.parameters()),
+                                            lr=args.retrain_lr, momentum=0.9)
+        else:
+            optimizer_fine_tune = optim.SGD(filter(lambda p: p.requires_grad, matched_cnn.parameters()),
+                                            lr=(args.retrain_lr / 10), momentum=0.9, weight_decay=0.0001)
+    else:
+        # optimizer_fine_tune = optim.SGD(filter(lambda p: p.requires_grad, matched_cnn.parameters()), lr=args.retrain_lr, momentum=0.9)
+        optimizer_fine_tune = optim.Adam(filter(lambda p: p.requires_grad, matched_cnn.parameters()), lr=0.001,
+                                         weight_decay=0.0001, amsgrad=True)
+
+    criterion_fine_tune = nn.CrossEntropyLoss().to(device)
+
+    logger.info('n_training: %d' % len(train_dl_local))
+    logger.info('n_test: %d' % len(test_dl_local))
+
+    train_acc = compute_accuracy(matched_cnn, train_dl_local, device=device)
+    test_acc, conf_matrix = compute_accuracy(matched_cnn, test_dl_local, get_confusion_matrix=True, device=device)
+
+    logger.info('>> Pre-Training Training accuracy: %f' % train_acc)
+    logger.info('>> Pre-Training Test accuracy: %f' % test_acc)
+
+    if mode != "block-wise":
+        if freezing_index < (len(weights) - 2):
+            retrain_epochs = args.retrain_epochs
+        else:
+            retrain_epochs = int(args.retrain_epochs * 3)
+    else:
+        retrain_epochs = args.retrain_epochs
+
+    for epoch in range(retrain_epochs):
+        epoch_loss_collector = []
+        for batch_idx, (x, target) in enumerate(train_dl_local):
+            x, target = x.to(device), target.to(device)
+
+            optimizer_fine_tune.zero_grad()
+            x.requires_grad = True
+            target.requires_grad = False
+            target = target.long()
+
+            out = matched_cnn(x)
+            loss = criterion_fine_tune(out, target)
+            epoch_loss_collector.append(loss.item())
+
+            loss.backward()
+            optimizer_fine_tune.step()
+
+        # logger.debug('Epoch: %d Loss: %f L2 loss: %f' % (epoch, loss.item(), reg*l2_reg))
+        epoch_loss = sum(epoch_loss_collector) / len(epoch_loss_collector)
+        logger.info('Epoch: %d Epoch Avg Loss: %f' % (epoch, epoch_loss))
+
+    train_acc = compute_accuracy(matched_cnn, train_dl_local, device=device)
+    test_acc, conf_matrix = compute_accuracy(matched_cnn, test_dl_local, get_confusion_matrix=True, device=device)
+
+    logger.info('>> Training accuracy after local retrain: %f' % train_acc)
+    logger.info('>> Test accuracy after local retrain: %f' % test_acc)
+    return matched_cnn
 
 def compute_skip_matching_multilayer(models, train_dl, test_dl, cls_freqs, n_classes, sigma0=None, it=0, sigma=None, gamma=None, 
                                     device="cpu", KL_reg=0, unlimi=False):
