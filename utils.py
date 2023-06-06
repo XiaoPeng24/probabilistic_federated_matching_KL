@@ -18,6 +18,7 @@ from sklearn.metrics import confusion_matrix
 
 from model import *
 from datasets import load_mnist_data, load_cifar10_data, MNIST_truncated, CIFAR10_truncated
+from datasets import load_fashionmnist_data, FashionMNIST_truncated
 
 # we've changed to a faster solver
 #from scipy.optimize import linear_sum_assignment
@@ -57,6 +58,8 @@ def partition_data(dataset, datadir, logdir, partition, n_nets, alpha=0.5):
         X_train, y_train, X_test, y_test = load_mnist_data(datadir)
     elif dataset == 'cifar10':
         X_train, y_train, X_test, y_test = load_cifar10_data(datadir)
+    elif dataset == 'fashionmnist':
+        X_train, y_train, X_test, y_test = load_fashionmnist_data(datadir)
 
     n_train = X_train.shape[0]
 
@@ -107,9 +110,9 @@ def init_nets(net_configs, dropout_p, n_nets, args):
         if args.model == "fcnet":
             net = FcNet(input_size, hidden_sizes, output_size, dropout_p)
         elif args.model == "simple-cnn":
-            cnn = SimpleCNN(input_dim=(16 * 5 * 5), hidden_dims=[120, 84], output_dim=10)
+            net = SimpleCNN(input_dim=(16 * 5 * 5), hidden_dims=[120, 84], output_dim=10)
         elif args.model == "moderate-cnn":
-            cnn = ModerateCNN()
+            net = ModerateCNN()
 
         nets[net_i] = net
 
@@ -121,12 +124,13 @@ def init_nets(net_configs, dropout_p, n_nets, args):
 
     return nets, model_meta_data, layer_type
 
-
 def get_dataloader(dataset, datadir, train_bs, test_bs, dataidxs=None):
     if dataset == 'mnist':
         dl_obj = MNIST_truncated
     elif dataset == 'cifar10':
         dl_obj = CIFAR10_truncated
+    elif dataset == 'fashionmnist':
+        dl_obj = FashionMNIST_truncated
 
     transform = transforms.Compose([transforms.ToTensor()])
 

@@ -17,6 +17,24 @@ from datasets import MNIST_truncated, CIFAR10_truncated
 from combine_nets import compute_ensemble_accuracy, compute_pdm_matching_multilayer, compute_iterative_pdm_matching, compute_fedavg_accuracy
 from combine_nets import BBP_MAP, weights_prob_selfI_stats
 import pdb
+from ot_fusion import wasserstein_ensemble
+from ot_fusion import parameters
+ot_args = parameters.get_parameters()
+ot_args.exact = True
+ot_args.correction  = True
+ot_args.weight_stats  = True
+ot_args.activation_histograms  = True
+ot_args.past_correction = True
+ot_args.print_distances = True
+# for the groud metric calculation
+# ot_args.act_num_samples = 200
+# ot_args.ground_metric_normalize = None
+# ot_args.not_squared = True
+# ot_args.dist_normalize = True
+# for something I don't know yet
+ot_args.activation_seed = 21
+ot_args.prelu_acts = True
+ot_args.recheck_acc = True
 
 def mkdirs(dirpath):
     try:
@@ -215,15 +233,15 @@ def load_new_state(nets, new_weights):
     return nets
 
 def run_exp(n):
-    print("Current n  is %d " % n)
+    logger.info("Current n  is %d " % n)
     #args.n_nets = n_nets
     #args.logdir = os.path.join(logdir, "n_nets "+str(n_nets))
     #gpu_id = int(n_layer+2 % 4)
     #gpu_id = 3 if n%4 == 0 else 1
-    gpu_id = 1
+    gpu_id = 0
     device_str = "cuda:" + str(gpu_id)
     device = torch.device(device_str if torch.cuda.is_available() else "cpu")
-    print("Current device is :", device)
+    logger.info("Current device is :", device)
 
     if args.layers == 1:
         if args.dataset == "mnist":
@@ -238,6 +256,8 @@ def run_exp(n):
         log_dir = os.path.join(args.logdir, "n_nets "+str(n))
         load_dir = os.path.join(args.loaddir, "n_nets "+str(n))
 
+    log_dir = os.path.join(log_dir, "_chaos")
+
     if not os.path.exists(log_dir):
         mkdirs(log_dir)
 
@@ -248,7 +268,7 @@ def run_exp(n):
     trials_res = {}
     trials_res["Experiment arguments"] = str(args)
 
-    print("The total trials of n_nets %d is " % args.n_nets, args.trials)
+    logger.info("The total trials of n_nets %d is " % args.n_nets, args.trials)
 
     for trial in range(args.trials):
         #save_dir = os.path.join(log_dir, "trial "+str(trial))
@@ -259,14 +279,14 @@ def run_exp(n):
         trials_res[trial] = {}
         seed = trial + args.init_seed
         trials_res[trial]['seed'] = seed
-        print("Executing Trial %d " % trial)
+        logger.info("Executing Trial %d " % trial)
         logger.debug("#" * 100)
         logger.debug("Executing Trial %d with seed %d" % (trial, seed))
 
         np.random.seed(seed)
         torch.manual_seed(seed)
 
-        print("Partitioning data")
+        logger.info("Partitioning data")
         X_train, y_train, X_test, y_test, net_dataidx_map, traindata_cls_counts = partition_data(
                         args.dataset, args.datadir, args.logdir, args.partition, args.n_nets, args.alpha)
         trials_res[trial]['Data statistics'] = str(traindata_cls_counts)
@@ -284,11 +304,11 @@ def run_exp(n):
                 else:
                     total_num_counts += 0
                     worker_class_counts[j] = 0
-            averaging_weights[:, i] = worker_class_counts / total_num_counts
+            averaging_weights[:, i] = np.array(worker_class_counts) / total_num_counts
 
         logger.info("averaging_weights: {}".format(averaging_weights))
 
-        print("Initializing nets")
+        logger.info("Initializing nets")
         nets, model_meta_data, layer_type = init_nets(args.net_config, args.dropout_p, args.n_nets, args)
 
         # local_train_accs = []
@@ -296,7 +316,7 @@ def run_exp(n):
         start = datetime.datetime.now()
         # for net_id, net in nets.items():
         #     dataidxs = net_dataidx_map[net_id]
-        #     print("Training network %s. n_training: %d" % (str(net_id), len(dataidxs)))
+        #     logger.info("Training network %s. n_training: %d" % (str(net_id), len(dataidxs)))
         #
         #     #save_path = os.path.join(save_dir, "model "+str(net_id)+".pkl")
         #     weight_path = os.path.join(weight_dir, "model "+str(net_id)+".pkl")
@@ -330,7 +350,7 @@ def run_exp(n):
         nets_list = list(nets.values())
 
         if ("u-ensemble" in args.experiment) or ("all" in args.experiment):
-            print("Computing Uniform ensemble accuracy")
+            logger.info("Computing Uniform ensemble accuracy")
             uens_train_acc, _ = compute_ensemble_accuracy(nets_list, train_dl, n_classes,  uniform_weights=True, device=device)
             uens_test_acc, _ = compute_ensemble_accuracy(nets_list, test_dl, n_classes, uniform_weights=True, device=device)
 
@@ -341,7 +361,7 @@ def run_exp(n):
             trials_res[trial]["Uniform ensemble (Test acc)"] = uens_test_acc
 
         if ("FedAvg" in args.experiment) or ("all" in args.experiment):
-            print("Computing FedAvg accuracy")
+            logger.info("Computing FedAvg accuracy")
             avg_train_acc, avg_test_acc, _, _ = compute_fedavg_accuracy(nets_list, train_dl, test_dl, traindata_cls_counts, n_classes, device=device)
 
             logger.debug("FedAvg (Train acc): %f" % avg_train_acc)
@@ -351,7 +371,7 @@ def run_exp(n):
             trials_res[trial]["FedAvg (Test acc)"] = avg_test_acc
 
         if ("pdm_KL" in args.experiment) or ("all" in args.experiment):
-            print("Computing hungarian matching")
+            logger.info("Computing hungarian matching")
             start = datetime.datetime.now()
 
             KL_regs = [0, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10]
@@ -410,6 +430,140 @@ def run_exp(n):
 
             trials_res[trial]["best_reg"] = best_reg
 
+        if ("SPAHM_KL" in args.experiment) or ("all" in args.experiment):
+            logger.info("Computing hungarian matching")
+            start = datetime.datetime.now()
+
+            KL_regs = [0, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10]
+
+            best_reg = 0
+            comp = 0
+
+            for KL_reg in KL_regs:
+                start = datetime.datetime.now()
+
+                trials_res[trial]["SPAHM_KL_reg " + str(KL_reg)] = {}
+
+                if args.model == "fcnet":
+                    res = compute_pdm_matching_multilayer(
+                        nets_list, train_dl, test_dl, traindata_cls_counts, args.net_config[-1], it=args.iter_epochs,
+                        sigma=args.pdm_sig,
+                        sigma0=args.pdm_sig0, gamma=args.pdm_gamma, device=device, KL_reg=KL_reg, unlimi=True,
+                        SPAHM=True
+                    )
+                else:
+                    res = BBP_MAP(nets_list, model_meta_data, layer_type, net_dataidx_map,
+                                  traindata_cls_counts, averaging_weights, args, args.net_config[-1],
+                                  it=args.iter_epochs,
+                                  sigma=args.pdm_sig, sigma0=args.pdm_sig0, gamma=args.pdm_gamma,
+                                  device=device, KL_reg=KL_reg, unlimi=True)
+
+                end = datetime.datetime.now()
+                timing = (end - start).seconds
+
+                weights = res['weights']
+                logger.debug("****** SPAHM_KL matching ******** ")
+                logger.debug("Best Sigma0: %s. Best sigma: %s Best gamma: %s. Best Test accuracy: %s. Train acc: %s. \n"
+                             % (str(res['sigma0']), str(res['sigma']), str(res['gamma']), str(res['test_accuracy']),
+                                str(res['train_accuracy'])))
+                logger.debug("SPAHM_KL log: %s " % str(res))
+
+                trials_res[trial]["SPAHM_KL_reg " + str(KL_reg)]["Best Result"] = {"Best Sigma0": res['sigma0'],
+                                                                                 "Best sigma": res['sigma'],
+                                                                                 "Best gamma": res['gamma'],
+                                                                                 "Best Test accuracy": res[
+                                                                                     'test_accuracy'],
+                                                                                 "Train acc": res['train_accuracy']}
+                trials_res[trial]["SPAHM_KL_reg " + str(KL_reg)]["shape"] = res['shapes']
+                trials_res[trial]["SPAHM_KL_reg " + str(KL_reg)]["SPAHM log"] = str(res)
+
+                # stats_layers = weights_prob_selfI_stats(weights, layer_type, res['sigma0'], args)
+                # prob_layers = stats_layers['probability']
+                # selfI_layers = stats_layers['self information']
+                # trials_res[trial]["pdm_KL_reg " + str(KL_reg)]['prob mean layers'] = np.mean(prob_layers, axis=1)
+                # trials_res[trial]["pdm_KL_reg " + str(KL_reg)]['prob std layers'] = np.std(prob_layers, axis=1)
+                # trials_res[trial]["pdm_KL_reg " + str(KL_reg)]['selfI mean layers'] = np.mean(selfI_layers, axis=1)
+                # trials_res[trial]["pdm_KL_reg " + str(KL_reg)]['selfI std layers'] = np.std(selfI_layers, axis=1)
+
+                best_test_acc = res['test_accuracy']
+                if best_test_acc > comp:
+                    best_reg = KL_reg
+                    comp = best_test_acc
+
+                end = datetime.datetime.now()
+                timing = (end - start).seconds
+                trials_res[trial]["SPAHM_KL_reg " + str(KL_reg)]["timing"] = timing
+
+            trials_res[trial]["best_reg"] = best_reg
+
+        if ("nafi_KL" in args.experiment) or ("all" in args.experiment):
+            logger.info("Computing hungarian matching")
+            start = datetime.datetime.now()
+
+            # KL_regs = [0, 0.0001, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10]
+
+            KL_regs = [0, 0.001, 2, 0.005, 0.0001, 0.05, 0.1, 0.01, 0.5, 1, 5, 10]
+
+            best_reg = 0
+            comp = 0
+
+            for KL_reg in KL_regs:
+                start = datetime.datetime.now()
+
+                trials_res[trial]["nafi_KL_reg " + str(KL_reg)] = {}
+
+                if args.model == "fcnet":
+                    res = compute_pdm_matching_multilayer(
+                        nets_list, train_dl, test_dl, traindata_cls_counts, args.net_config[-1], it=args.iter_epochs,
+                        sigma=args.pdm_sig,
+                        sigma0=args.pdm_sig0, gamma=args.pdm_gamma, device=device, KL_reg=KL_reg, unlimi=True,
+                        SPAHM=False, nafi=True
+                    )
+                else:
+                    res = BBP_MAP(nets_list, model_meta_data, layer_type, net_dataidx_map,
+                                  traindata_cls_counts, averaging_weights, args, args.net_config[-1],
+                                  it=args.iter_epochs,
+                                  sigma=args.pdm_sig, sigma0=args.pdm_sig0, gamma=args.pdm_gamma,
+                                  device=device, KL_reg=KL_reg, unlimi=True)
+
+                end = datetime.datetime.now()
+                timing = (end - start).seconds
+
+                weights = res['weights']
+                logger.debug("****** nafi_KL matching ******** ")
+                logger.debug("Best Sigma0: %s. Best sigma: %s Best gamma: %s. Best Test accuracy: %s. Train acc: %s. \n"
+                             % (str(res['sigma0']), str(res['sigma']), str(res['gamma']), str(res['test_accuracy']),
+                                str(res['train_accuracy'])))
+                logger.debug("nafi_KL log: %s " % str(res))
+
+                trials_res[trial]["nafi_KL_reg " + str(KL_reg)]["Best Result"] = {"Best Sigma0": res['sigma0'],
+                                                                                 "Best sigma": res['sigma'],
+                                                                                 "Best gamma": res['gamma'],
+                                                                                 "Best Test accuracy": res[
+                                                                                     'test_accuracy'],
+                                                                                 "Train acc": res['train_accuracy']}
+                trials_res[trial]["nafi_KL_reg " + str(KL_reg)]["shape"] = res['shapes']
+                trials_res[trial]["nafi_KL_reg " + str(KL_reg)]["nafi log"] = str(res)
+
+                # stats_layers = weights_prob_selfI_stats(weights, layer_type, res['sigma0'], args)
+                # prob_layers = stats_layers['probability']
+                # selfI_layers = stats_layers['self information']
+                # trials_res[trial]["pdm_KL_reg " + str(KL_reg)]['prob mean layers'] = np.mean(prob_layers, axis=1)
+                # trials_res[trial]["pdm_KL_reg " + str(KL_reg)]['prob std layers'] = np.std(prob_layers, axis=1)
+                # trials_res[trial]["pdm_KL_reg " + str(KL_reg)]['selfI mean layers'] = np.mean(selfI_layers, axis=1)
+                # trials_res[trial]["pdm_KL_reg " + str(KL_reg)]['selfI std layers'] = np.std(selfI_layers, axis=1)
+
+                best_test_acc = res['test_accuracy']
+                if best_test_acc > comp:
+                    best_reg = KL_reg
+                    comp = best_test_acc
+
+                end = datetime.datetime.now()
+                timing = (end - start).seconds
+                trials_res[trial]["nafi_KL_reg " + str(KL_reg)]["timing"] = timing
+
+            trials_res[trial]["best_reg"] = best_reg
+
         if ("pdm_I" in args.experiment) or ("all" in args.experiment):
             
             if trial == 0:
@@ -417,7 +571,7 @@ def run_exp(n):
                 if not os.path.exists(log_dir):
                     mkdirs(log_dir)
 
-            print("Computing hungarian matching")
+            logger.info("Computing hungarian matching")
             start = datetime.datetime.now()
 
             #I_regs = [0, 0.001, 0.01, 0.1, 1, 10, 100, 1000]
@@ -457,7 +611,7 @@ def run_exp(n):
                 timing = (end - start).seconds
                 trials_res[trial]["pdm_I_reg "+str(I_reg)]["timing"] = timing
 
-                print("Trial %d I_reg %f finished!!!" % (trial, I_reg))
+                logger.info("Trial %d I_reg %f finished!!!" % (trial, I_reg))
 
             trials_res[trial]["best_reg"] = best_reg
 
@@ -468,7 +622,7 @@ def run_exp(n):
                 if not os.path.exists(log_dir):
                     mkdirs(log_dir)
 
-            print("Computing hungarian matching")
+            logger.info("Computing hungarian matching")
             start = datetime.datetime.now()
 
             #I_regs = [0, 0.001, 0.01, 0.1, 1, 10, 100, 1000]
@@ -508,7 +662,7 @@ def run_exp(n):
                 timing = (end - start).seconds
                 trials_res[trial]["pdm_neg_I_reg "+str(I_reg)]["timing"] = timing
 
-                print("Trial %d I_neg_reg %f finished!!!" % (trial, I_reg))
+                logger.info("Trial %d I_neg_reg %f finished!!!" % (trial, I_reg))
 
             trials_res[trial]["best_reg"] = best_reg
 
@@ -519,7 +673,7 @@ def run_exp(n):
                 if not os.path.exists(log_dir):
                     mkdirs(log_dir)
 
-            print("Computing hungarian matching")
+            logger.info("Computing hungarian matching")
             start = datetime.datetime.now()
 
             coffs = [0, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10]
@@ -557,7 +711,7 @@ def run_exp(n):
                 timing = (end - start).seconds
                 trials_res[trial]["pdm_coff 1-"+str(coff)]["timing"] = timing
 
-                print("Trial %d coff %f finished!!!" % (trial, coff))
+                logger.info("Trial %d coff %f finished!!!" % (trial, coff))
 
             trials_res[trial]["best_coff"] = str(best_coff)
 
@@ -568,7 +722,7 @@ def run_exp(n):
                 if not os.path.exists(log_dir):
                     mkdirs(log_dir)
 
-            print("Computing hungarian matching")
+            logger.info("Computing hungarian matching")
             start = datetime.datetime.now()
 
             coffs = [0, 1]
@@ -606,12 +760,12 @@ def run_exp(n):
                 timing = (end - start).seconds
                 trials_res[trial]["pdm_fix "+str(coff)]["timing"] = timing
 
-                print("Trial %d coff %f finished!!!" % (trial, coff))
+                logger.info("Trial %d coff %f finished!!!" % (trial, coff))
 
             trials_res[trial]["best_coff"] = str(best_coff)
 
         if ("pdm_iterative" in args.experiment) or ("all" in args.experiment):
-            print("Running Iterative PDM matching procedure")
+            logger.info("Running Iterative PDM matching procedure")
             logger.debug("Running Iterative PDM matching procedure")
 
             for KL_reg in KL_regs:
@@ -647,7 +801,7 @@ def run_exp(n):
                     # Train these networks again
                     for net_id, net in iter_nets.items():
                         dataidxs = net_dataidx_map[net_id]
-                        print("Training network %s. n_training: %d" % (str(net_id), len(dataidxs)))
+                        logger.info("Training network %s. n_training: %d" % (str(net_id), len(dataidxs)))
 
                         net_train_dl, net_test_dl = get_dataloader(args.dataset, args.datadir, 32, 32, dataidxs)
                         train_net(net_id, net, net_train_dl, net_test_dl, expepochs, lr_iter, reg_iter, net_weights_new[net_id],
@@ -656,7 +810,30 @@ def run_exp(n):
                     lr_iter *= args.lr_decay
                     reg_iter *= args.reg_fac
 
-                
+        if ("ot_fusion" in args.experiment) or ("all" in args.experiment):
+            logger.info("Computing ot fusion")
+            start = datetime.datetime.now()
+
+            # KL_regs = [0, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10]
+
+            best_reg = 0
+            comp = 0
+
+            ## the net to aligned with
+            aligned_net = nets_list[0]
+
+            for i in range(1,len(nets_list)):
+                fusion_models = [nets_list[i], aligned_net]
+                ot_args.input_dim = 784
+                ot_args.hidden_dims = [100]
+                ot_args.output_dim = 10
+                ot_args.model_name = 'fcnet'
+                geometric_acc, aligned_net = wasserstein_ensemble.geometric_ensembling_modularized(ot_args, fusion_models,
+                                                                                                       train_dl, test_dl)
+
+            trials_res[trial]["ot_fusion_acc"] = geometric_acc
+
+
         logger.debug("Trial %d completed" % trial)
         logger.debug("#"*100)
 
@@ -687,7 +864,9 @@ def abli_exp(n=[10], dataset="mnist"):
     #    n_nets_list = [i for i in range(0, n_nets+1, 5)]
     #    n_nets_list[0] = 2
     #    n_layers_list = [i+1 for i in range(n_layers)]
-    partitions = ["hetero-dir", "homo"]
+    # partitions = ["hetero-dir", "homo"]
+    # partitions = ["homo"]
+    partitions = ["hetero-dir"]
     #n_layer_list = [i+2 for i in range(n_layers-1)] # don't need layer_num 1
     if args.layers == 1:
         #n_list = [i+1 for i in range(n)]
@@ -717,20 +896,21 @@ def abli_exp(n=[10], dataset="mnist"):
     for partition in partitions:
         #logdir = os.path.join('log_abli', now.strftime("%Y-%m-%d %H"),
         #                      dataset, partition)
-        logdir = os.path.join('KL_regs_bst_hyp_unlimi',
-                              dataset, partition)
+        # logdir = os.path.join('KL_regs_bst_hyp_unlimi_2',
+        #                       dataset, partition)
+        logdir = os.path.join('KL_regs_bst_hyp_unlimi', dataset, partition, args.experiment[0])
         args.loaddir = os.path.join('saved_weights', dataset, partition)
         args.logdir = logdir
         args.partition = partition
-        print("Partition type is ", partition)
+        logger.info("Partition type is ", partition)
         abli_res = {}
         
         # set the sig, sig0, gamma
-        if dataset == "mnist" and partition == "homo":
+        if (dataset == "mnist" or dataset == "fashionmnist") and partition == "homo":
             args.pdm_sig0 = 10
             args.pdm_sig = 0.5
             args.pdm_gamma = 10
-        elif dataset == "mnist" and partition == "hetero-dir":
+        elif (dataset == "mnist" or dataset == "fashionmnist") and partition == "hetero-dir":
             args.pdm_sig0 = 3
             args.pdm_sig = 0.9
             args.pdm_gamma = 1
@@ -759,5 +939,5 @@ if __name__ == "__main__":
     #run_exp()
     parser = get_parser()
     args = parser.parse_args()
-    print("Abliation experiment running...")
+    logger.info("Abliation experiment running...")
     abli_exp(n=args.n, dataset=args.dataset)

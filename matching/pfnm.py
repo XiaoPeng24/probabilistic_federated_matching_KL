@@ -5,6 +5,9 @@ import pdb
 
 from matching.kl_cost import compute_KL3_cost, compute_KL2_cost
 from matching.kl_cost import compute_cost as unlimi_cost, compute_KL4_cost as unlimi_KL_cost
+from matching.kl_cost import compute_KL5_cost as unlimi_KL_inverse_cost
+from matching.kl_cost import SPAHM_cost, SPAHM_KL_cost, hyperparameters
+from matching.kl_cost import nafi_KL_cost
 from matching.self_info_cost import self_info_cost, self_info2_cost as unlimi_self_info_cost
 
 
@@ -42,13 +45,19 @@ def compute_cost(global_weights, weights_j, global_sigmas, sigma_inv_j, prior_me
     return full_cost
 
 
-def matching_upd_j(weights_j, global_weights, sigma_inv_j, global_sigmas, prior_mean_norm, prior_inv_sigma,
-                   popularity_counts, gamma, J, KL_reg=0, I_reg=0, coff=1, fix_coff=0, unlimi=False):
+def matching_upd_j(weights_j, global_weights,
+                   sigma_inv_j, global_sigmas, prior_mean_norm, prior_inv_sigma,
+                   popularity_counts, gamma, J, KL_reg=0, I_reg=0, coff=1, fix_coff=0, unlimi=False, SPAHM=False, nafi=False):
 
     L = global_weights.shape[0]
 
     if unlimi:
-        full_cost = unlimi_cost(global_weights, weights_j, global_sigmas, sigma_inv_j, prior_mean_norm, prior_inv_sigma,
+        if SPAHM:
+            full_cost = SPAHM_cost(global_weights, weights_j, sigma_inv_j, prior_mean_norm,
+                                    prior_inv_sigma,
+                                    popularity_counts, gamma, J)
+        else:
+            full_cost = unlimi_cost(global_weights, weights_j, global_sigmas, sigma_inv_j, prior_mean_norm, prior_inv_sigma,
                              popularity_counts, gamma, J, coff, fix_coff)
     else:
         full_cost = compute_cost(global_weights, weights_j, global_sigmas, sigma_inv_j, prior_mean_norm, prior_inv_sigma,
@@ -73,11 +82,22 @@ def matching_upd_j(weights_j, global_weights, sigma_inv_j, global_sigmas, prior_
 
     if KL_reg!=0:
         if unlimi:
-            KL_cost = KL_reg*unlimi_KL_cost(global_weights, weights_j, global_sigmas, sigma_inv_j, prior_mean_norm, prior_inv_sigma,
+            if SPAHM:
+                KL_cost = KL_reg*SPAHM_KL_cost(global_weights, weights_j, sigma_inv_j, prior_mean_norm,
+                                       prior_inv_sigma,
+                                       popularity_counts, gamma, J)
+            else:
+                KL_cost = KL_reg*unlimi_KL_cost(global_weights, weights_j, global_sigmas, sigma_inv_j, prior_mean_norm, prior_inv_sigma,
                              popularity_counts, gamma, J)
         else:
             KL_cost = KL_reg*compute_KL2_cost(global_weights, weights_j, global_sigmas, sigma_inv_j, prior_mean_norm, prior_inv_sigma,
                              popularity_counts, gamma, J)
+
+    nafi_cost = 0
+
+    if KL_reg!=0 and nafi:
+        nafi_cost = KL_reg*nafi_KL_cost(global_weights, weights_j, global_sigmas, sigma_inv_j, prior_mean_norm, prior_inv_sigma,
+                                        popularity_counts, gamma, J)
 
     I_cost = 0
 
@@ -89,7 +109,7 @@ def matching_upd_j(weights_j, global_weights, sigma_inv_j, global_sigmas, prior_
             I_cost = I_reg*self_info_cost(global_weights, weights_j, global_sigmas, sigma_inv_j, prior_mean_norm, prior_inv_sigma,
                              popularity_counts, gamma, J)
 
-    row_ind, col_ind = linear_sum_assignment(-full_cost+KL_cost+I_cost)
+    row_ind, col_ind = linear_sum_assignment(-full_cost+KL_cost+I_cost+nafi_cost)
     # row_ind, col_ind = solve_dense(-full_cost+KL_cost+I_cost)
 
     assignment_j = []
@@ -111,6 +131,40 @@ def matching_upd_j(weights_j, global_weights, sigma_inv_j, global_sigmas, prior_
 
     return global_weights, global_sigmas, popularity_counts, assignment_j
 
+
+def matching_upd_j_SPAHM(atoms_j, global_atoms, global_atoms_squared, sigma, sigma0, mu0, popularity_counts, gamma, J,
+                   KL_reg=0, unlimi=False):
+    L = global_atoms.shape[0]
+
+    full_cost = SPAHM_cost(global_atoms, atoms_j, sigma, mu0, sigma0, popularity_counts, gamma, J)
+
+    KL_cost = 0
+
+    if KL_reg != 0:
+        KL_cost = KL_reg * SPAHM_KL_cost(global_atoms, atoms_j, sigma, mu0,
+                    sigma0, popularity_counts, gamma, J)
+
+    row_ind, col_ind = linear_sum_assignment(-full_cost + KL_cost)
+    # row_ind, col_ind = solve_dense(-full_cost+KL_cost+I_cost)
+
+    assignment_j = []
+
+    new_L = L
+
+    for l, i in zip(row_ind, col_ind):
+        if i < L:
+            popularity_counts[i] += 1
+            assignment_j.append(i)
+            global_atoms[i] += atoms_j[l]
+            global_atoms_squared[i] += atoms_j[l] ** 2
+        else:  # new neuron
+            popularity_counts += [1]
+            assignment_j.append(new_L)
+            new_L += 1
+            global_atoms = np.vstack((global_atoms, atoms_j[l]))
+            global_atoms_squared = np.vstack((global_atoms_squared, atoms_j[l] ** 2))
+
+    return global_atoms, global_atoms_squared, popularity_counts, assignment_j
 
 def objective(global_weights, global_sigmas):
     obj = ((global_weights) ** 2 / global_sigmas).sum()
@@ -225,37 +279,66 @@ def process_softmax_bias(batch_weights, last_layer_const, sigma, sigma0):
 
 
 def match_layer(weights_bias, sigma_inv_layer, mean_prior, sigma_inv_prior, gamma, it, KL_reg=0, 
-                I_reg=0, coff=1, fix_coff=0, unlimi=False):
+                I_reg=0, coff=1, fix_coff=0, unlimi=False, SPAHM=False, nafi=False):
     """
     weight_bias: [J, np.array(n_neurons, dim)]
+    sigma_inv_layer: [J, dim]
+    mean_prior: [dim]
+    sigma_inv_prior: [dim]
+    Modified in April 28th, 2022: combine it with the SPAHM
     """
     #pdb.set_trace()
     
     J = len(weights_bias)
+    D = weights_bias[0].shape[1]
 
     group_order = sorted(range(J), key=lambda x: -weights_bias[x].shape[0])
 
     batch_weights_norm = [w * s for w, s in zip(weights_bias, sigma_inv_layer)]
+    assignment = [[] for _ in range(J)]
+    # if SPAHM:
+    #     sigma = np.ones(D) *  (1 / sigma_inv_layer[0][0])
+    #     sigma0 = np.ones(D) * (1 / sigma_inv_prior[0])
+    #     total_atoms = sum([weight_j.shape[0] for weight_j in weights_bias])
+    #     mu0 = sum([weight_j.sum(axis=0) for weight_j in weights_bias]) / total_atoms
+    #     print('Init mu0 estimate mean is %f' % (mu0.mean()))
+    #     global_atoms = np.copy(weights_bias[group_order[0]])
+    #     global_atoms_squared = np.copy(weights_bias[group_order[0]] ** 2)
+    #
+    #     popularity_counts = [1] * global_atoms.shape[0]
+    #     assignment[group_order[0]] = list(range(global_atoms.shape[0]))
+    # else:
     prior_mean_norm = mean_prior * sigma_inv_prior
-
     global_weights = prior_mean_norm + batch_weights_norm[group_order[0]]
     global_sigmas = np.outer(np.ones(global_weights.shape[0]), sigma_inv_prior + sigma_inv_layer[group_order[0]])
 
     popularity_counts = [1] * global_weights.shape[0]
 
-    assignment = [[] for _ in range(J)]
-
     assignment[group_order[0]] = list(range(global_weights.shape[0]))
 
     ## Initialize
     for j in group_order[1:]:
+        # if SPAHM:
+        #     global_atoms, global_atoms_squared, popularity_counts, assignment_j = matching_upd_j_SPAHM(weights_bias[j],
+        #                                                                                                global_atoms,
+        #                                                                                                global_atoms_squared,
+        #                                                                                                sigma,
+        #                                                                                                sigma0,
+        #                                                                                                mu0,
+        #                                                                                                popularity_counts, gamma, J,
+        #                                                                                                KL_reg, unlimi)
+        #     assignment[j] = assignment_j
+        #
+        #     # mu0, sigma, sigma0 = hyperparameters(global_atoms, global_atoms_squared, popularity_counts)
+        #     print('Init Sigma mean estimate is %f; sigma0 is %f; mu0 is %f' % (sigma.mean(), sigma0.mean(), mu0.mean()))
+        # else:
         global_weights, global_sigmas, popularity_counts, assignment_j = matching_upd_j(batch_weights_norm[j],
                                                                                         global_weights,
                                                                                         sigma_inv_layer[j],
                                                                                         global_sigmas, prior_mean_norm,
                                                                                         sigma_inv_prior,
                                                                                         popularity_counts, gamma, J, KL_reg,
-                                                                                        I_reg, coff, fix_coff, unlimi)
+                                                                                        I_reg, coff, fix_coff, unlimi, SPAHM, nafi)
         assignment[j] = assignment_j
 
     ## Iterate over groups
@@ -277,13 +360,35 @@ def match_layer(weights_bias, sigma_inv_layer, mean_prior, sigma_inv_prior, gamm
                             elif i == l_ind and j_clean != j:
                                 print('Warning - weird unmatching')
                 else:
+                    # if SPAHM:
+                    #     global_atoms[i] = global_atoms[i] - weights_bias[j][l]
+                    #     global_atoms_squared[i] = global_atoms_squared[i] - weights_bias[j][l] ** 2
+                    # else:
                     global_weights[i] = global_weights[i] - batch_weights_norm[j][l]
                     global_sigmas[i] -= sigma_inv_layer[j]
 
+            # if SPAHM:
+            #     global_atoms = np.delete(global_atoms, to_delete, axis=0)
+            #     global_atoms_squared = np.delete(global_atoms_squared, to_delete, axis=0)
+            # else:
             global_weights = np.delete(global_weights, to_delete, axis=0)
             global_sigmas = np.delete(global_sigmas, to_delete, axis=0)
 
             ## Match j
+            # if SPAHM:
+            #     global_atoms, global_atoms_squared, popularity_counts, assignment_j = matching_upd_j_SPAHM(weights_bias[j],
+            #                                                                                          global_atoms,
+            #                                                                                          global_atoms_squared,
+            #                                                                                          sigma, sigma0,
+            #                                                                                          mu0,
+            #                                                                                          popularity_counts,
+            #                                                                                          gamma, J,
+            #                                                                                          KL_reg,unlimi)
+            #     assignment[j] = assignment_j
+            #
+            #     # mu0, sigma, sigma0 = hyperparameters(global_atoms, global_atoms_squared, popularity_counts)
+            #     print('Sigma mean estimate is %f; sigma0 is %f; mu0 is %f' % (sigma.mean(), sigma0.mean(), mu0.mean()))
+            # else:
             global_weights, global_sigmas, popularity_counts, assignment_j = matching_upd_j(batch_weights_norm[j],
                                                                                             global_weights,
                                                                                             sigma_inv_layer[j],
@@ -291,16 +396,20 @@ def match_layer(weights_bias, sigma_inv_layer, mean_prior, sigma_inv_prior, gamm
                                                                                             prior_mean_norm,
                                                                                             sigma_inv_prior,
                                                                                             popularity_counts, gamma, J, KL_reg,
-                                                                                            I_reg, coff, fix_coff, unlimi)
+                                                                                            I_reg, coff, fix_coff, unlimi, SPAHM, nafi)
             assignment[j] = assignment_j
 
+    # if SPAHM:
+    #     print('Number of global neurons is %d, gamma %f' % (global_atoms.shape[0], gamma))
+    #     return  assignment, mu0 * sigma + global_atoms * sigma0, np.outer(popularity_counts, sigma0) + sigma
+    # else:
     print('Number of global neurons is %d, gamma %f' % (global_weights.shape[0], gamma))
 
     return assignment, global_weights, global_sigmas
 
 
 def layer_group_descent(batch_weights, batch_frequencies, sigma_layers, sigma0_layers, gamma_layers, it, 
-                        KL_reg=0, I_reg=0, coff=1, fix_coff=0, unlimi=False, use_freq=False):
+                        KL_reg=0, I_reg=0, coff=1, fix_coff=0, unlimi=False, use_freq=False, SPAHM=False, nafi=False):
     """
     batch_frequencies: [n_nets, n_classes, freqs]
     batch_weights: [n_nets, n_layers(weight,bias), dim(D,1)]
@@ -380,7 +489,7 @@ def layer_group_descent(batch_weights, batch_frequencies, sigma_layers, sigma0_l
 
         assignment_c, global_weights_c, global_sigmas_c = match_layer(weights_bias, sigma_inv_layer, mean_prior,
                                                                       sigma_inv_prior, gamma, it, KL_reg, I_reg, 
-                                                                      coff, fix_coff, unlimi)
+                                                                      coff, fix_coff, unlimi, SPAHM, nafi)
         L_next = global_weights_c.shape[0]
 
         if c == (n_layers - 1) and n_layers > 2:

@@ -508,7 +508,7 @@ def compute_skip_net_accuracy(weights, train_dl, test_dl, n_classes, device="cpu
     return train_acc, test_acc, conf_matrix_train, conf_matrix_test
 
 def compute_pdm_matching_multilayer(models, train_dl, test_dl, cls_freqs, n_classes, sigma0=None, it=0, sigma=None, gamma=None, 
-                                    device="cpu", KL_reg=0, unlimi=False, use_freq=False):
+                                    device="cpu", KL_reg=0, unlimi=False, use_freq=False, SPAHM=False, nafi=False):
     print("The iteration number of matching is ", it)
     batch_weights = pdm_prepare_weights(models, device=device)
     batch_freqs = pdm_prepare_freq(cls_freqs, n_classes)
@@ -524,7 +524,7 @@ def compute_pdm_matching_multilayer(models, train_dl, test_dl, cls_freqs, n_clas
 
         hungarian_weights, assignments = pdm_multilayer_group_descent(
             batch_weights, sigma0_layers=sigma0, sigma_layers=sigma, batch_frequencies=batch_freqs, it=it, gamma_layers=gamma, 
-            KL_reg=KL_reg, unlimi=unlimi, use_freq=use_freq
+            KL_reg=KL_reg, unlimi=unlimi, use_freq=use_freq, SPAHM=SPAHM, nafi=nafi
         )
         #hungarian_weights.to(device)
         train_acc, test_acc, _, _ = compute_pdm_net_accuracy(hungarian_weights, train_dl, test_dl, n_classes, device=device)
